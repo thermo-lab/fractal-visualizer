@@ -1,3 +1,29 @@
+import GUI from 'https://cdn.jsdelivr.net/npm/lil-gui@0.19/+esm';
+
+// Define the parameters we want to tweak
+const params = {
+    scale: 2.0,
+    iterations: 12,
+    baseColor: [0.8, 0.4, 0.1], // RGB array for the color picker
+    lightX: 2.0,
+    lightY: 3.0,
+    lightZ: -2.0
+};
+
+// Initialize the UI panel
+const gui = new GUI({ title: 'Fractal Controls' });
+
+// Add sliders and folders
+const mathFolder = gui.addFolder('Mathematics');
+mathFolder.add(params, 'scale', -3.0, 3.0).name('Box Scale');
+mathFolder.add(params, 'iterations', 1, 30, 1).name('Iterations');
+
+const visualFolder = gui.addFolder('Visuals');
+visualFolder.addColor(params, 'baseColor').name('Surface Color');
+visualFolder.add(params, 'lightX', -10.0, 10.0).name('Light X');
+visualFolder.add(params, 'lightY', -10.0, 10.0).name('Light Y');
+visualFolder.add(params, 'lightZ', -10.0, 10.0).name('Light Z');
+
 const canvas = document.getElementById('glcanvas');
 const gl = canvas.getContext('webgl2');
 
@@ -28,25 +54,23 @@ const fsSource = `#version 300 es
     out vec4 outColor;
     uniform vec2 u_resolution;
     uniform float u_time;
-    uniform vec3 u_ro; // NEW: Camera position from JavaScript
-    uniform vec3 u_ta;
+    uniform vec3 u_ro; 
+    uniform vec3 u_ta; 
 
-    // Mandelbox Distance Estimator
+    // NEW UNIFORMS from our UI
+    uniform float u_scale;
+    uniform int u_iterations;
+    uniform vec3 u_baseColor;
+    uniform vec3 u_lightPos;
+
     float map(vec3 p) {
         vec3 offset = p;
         float dr = 1.0;
         
-        // The core parameter of the Mandelbox. 
-        // Try changing this to -1.5, 2.5, or 3.0 later for wildly different shapes!
-        float scale = 2.0; 
-
-        // The fractal iteration loop
-        for (int i = 0; i < 12; i++) {
-            
-            // 1. Box Fold: mirrors space outside the limits (-1.0 to 1.0)
+        // Loop runs based on the UI slider now
+        for (int i = 0; i < u_iterations; i++) {
             p = clamp(p, -1.0, 1.0) * 2.0 - p;
             
-            // 2. Sphere Fold: pushes space outward from the center
             float r2 = dot(p, p);
             if (r2 < 0.25) { 
                 p *= 4.0;
@@ -56,19 +80,17 @@ const fsSource = `#version 300 es
                 dr /= r2;
             }
             
-            // 3. Scale and Translate
-            p = p * scale + offset;
-            dr = dr * abs(scale) + 1.0;
+            // Scale uses the UI slider
+            p = p * u_scale + offset;
+            dr = dr * abs(u_scale) + 1.0;
         }
         
-        // Return estimated distance
         return length(p) / abs(dr);
     }
 
     vec3 getNormal(vec3 p) {
         float d = map(p);
         vec2 e = vec2(0.001, 0.0);
-        
         vec3 n = d - vec3(
             map(p - e.xyy),
             map(p - e.yxy),
@@ -80,13 +102,10 @@ const fsSource = `#version 300 es
     void main() {
         vec2 uv = (gl_FragCoord.xy * 2.0 - u_resolution.xy) / u_resolution.y;
 
-        // NEW: Calculate a "LookAt" matrix to point the camera at the center
-        vec3 ta = u_ta; // Target (Center of the fractal)
-        vec3 ww = normalize(ta - u_ro); // Forward vector
-        vec3 uu = normalize(cross(ww, vec3(0.0, 1.0, 0.0))); // Right vector
-        vec3 vv = normalize(cross(uu, ww)); // Up vector
-        
-        // Construct the final ray direction
+        vec3 ta = u_ta; 
+        vec3 ww = normalize(ta - u_ro); 
+        vec3 uu = normalize(cross(ww, vec3(0.0, 1.0, 0.0))); 
+        vec3 vv = normalize(cross(uu, ww)); 
         vec3 rd = normalize(uv.x * uu + uv.y * vv + 1.0 * ww); 
 
         float t = 0.0;
@@ -98,7 +117,6 @@ const fsSource = `#version 300 es
             vec3 p = u_ro + rd * t;
             float d = map(p);
             t += d;
-            
             if(d < surf_dist || t > max_dist) break;
         }
 
@@ -108,14 +126,14 @@ const fsSource = `#version 300 es
             vec3 p = u_ro + rd * t;       
             vec3 n = getNormal(p);      
             
-            vec3 lightPos = vec3(2.0, 3.0, -2.0);
-            vec3 lightDir = normalize(lightPos - p);
+            // Light position from UI
+            vec3 lightDir = normalize(u_lightPos - p);
             
             float dif = clamp(dot(n, lightDir), 0.0, 1.0);
             float ambient = 0.1;
             
-            vec3 baseColor = vec3(0.8, 0.4, 0.1); 
-            col = baseColor * (dif + ambient);
+            // Base color from UI
+            col = u_baseColor * (dif + ambient);
             
             float rim = 1.0 - clamp(dot(-rd, n), 0.0, 1.0);
             col += vec3(0.2, 0.1, 0.0) * pow(rim, 4.0);
@@ -229,6 +247,10 @@ canvas.addEventListener('wheel', (e) => {
 // Add this near your other location grabs
 const roLocation = gl.getUniformLocation(program, 'u_ro');
 const taLocation = gl.getUniformLocation(program, 'u_ta'); // NEW
+const scaleLocation = gl.getUniformLocation(program, 'u_scale');
+const iterationsLocation = gl.getUniformLocation(program, 'u_iterations');
+const baseColorLocation = gl.getUniformLocation(program, 'u_baseColor');
+const lightPosLocation = gl.getUniformLocation(program, 'u_lightPos');
 
 // The Render Loop
 function render(time) {
@@ -256,6 +278,14 @@ function render(time) {
     // 3. Send the updated position and target to the GPU
     gl.uniform3f(roLocation, roX, roY, roZ);
     gl.uniform3f(taLocation, cTarget.x, cTarget.y, cTarget.z);
+
+    // Send the math params
+    gl.uniform1f(scaleLocation, params.scale);
+    gl.uniform1i(iterationsLocation, params.iterations);
+
+    // Send the visual params
+    gl.uniform3f(baseColorLocation, params.baseColor[0], params.baseColor[1], params.baseColor[2]);
+    gl.uniform3f(lightPosLocation, params.lightX, params.lightY, params.lightZ);
 
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     requestAnimationFrame(render);
