@@ -244,6 +244,101 @@ canvas.addEventListener('wheel', (e) => {
     tZoom = Math.max(0.1, Math.min(20.0, tZoom));
 }, { passive: false });
 
+// --- Touch Controls ---
+let lastTouch = { x: 0, y: 0 };
+let lastTouchDistance = 0;
+let lastTouchCenter = { x: 0, y: 0 };
+
+// Helper function to calculate distance between two fingers (for zooming)
+function getTouchDistance(touches) {
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.hypot(dx, dy);
+}
+
+// Helper function to calculate the center point between two fingers (for panning)
+function getTouchCenter(touches) {
+    return {
+        x: (touches[0].clientX + touches[1].clientX) / 2,
+        y: (touches[0].clientY + touches[1].clientY) / 2
+    };
+}
+
+canvas.addEventListener('touchstart', (e) => {
+    e.preventDefault(); // Prevents the whole browser page from pulling/scrolling
+
+    if (e.touches.length === 1) {
+        isOrbiting = true;
+        lastTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    } else if (e.touches.length === 2) {
+        isOrbiting = false;
+        isPanning = true;
+        lastTouchDistance = getTouchDistance(e.touches);
+        lastTouchCenter = getTouchCenter(e.touches);
+    }
+}, { passive: false }); // passive: false is required to allow e.preventDefault()
+
+canvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+
+    // 1-Finger Orbit
+    if (e.touches.length === 1 && isOrbiting) {
+        let deltaX = e.touches[0].clientX - lastTouch.x;
+        let deltaY = e.touches[0].clientY - lastTouch.y;
+
+        tAngleX -= deltaX * 0.01;
+        tAngleY += deltaY * 0.01;
+        tAngleY = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, tAngleY));
+
+        lastTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    }
+    // 2-Finger Pan and Zoom
+    else if (e.touches.length === 2 && isPanning) {
+        // Handle Zoom (Pinch)
+        const currentDistance = getTouchDistance(e.touches);
+        const zoomDelta = lastTouchDistance - currentDistance;
+
+        // Touch zooming needs a slightly higher multiplier than the mouse wheel
+        tZoom += zoomDelta * 0.005 * tZoom;
+        tZoom = Math.max(0.1, Math.min(20.0, tZoom));
+        lastTouchDistance = currentDistance;
+
+        // Handle Pan (Two-finger drag)
+        const currentCenter = getTouchCenter(e.touches);
+        const deltaX = currentCenter.x - lastTouchCenter.x;
+        const deltaY = currentCenter.y - lastTouchCenter.y;
+
+        let rightX = Math.cos(cAngleX);
+        let rightZ = -Math.sin(cAngleX);
+
+        let panSpeed = 0.002 * cZoom;
+        tTarget.x -= rightX * deltaX * panSpeed;
+        tTarget.z -= rightZ * deltaX * panSpeed;
+        tTarget.y += deltaY * panSpeed;
+
+        lastTouchCenter = currentCenter;
+    }
+}, { passive: false });
+
+canvas.addEventListener('touchend', (e) => {
+    e.preventDefault();
+
+    if (e.touches.length < 2) isPanning = false;
+    if (e.touches.length === 0) isOrbiting = false;
+
+    // If you lift one finger but keep the other down, seamlessly switch back to orbiting
+    if (e.touches.length === 1) {
+        lastTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        isOrbiting = true;
+    }
+});
+
+// Failsafe in case a system notification interrupts the touch
+canvas.addEventListener('touchcancel', () => {
+    isOrbiting = false;
+    isPanning = false;
+});
+
 // Add this near your other location grabs
 const roLocation = gl.getUniformLocation(program, 'u_ro');
 const taLocation = gl.getUniformLocation(program, 'u_ta'); // NEW
