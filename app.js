@@ -34,18 +34,20 @@ let cRot = { w: 1, x: 0, y: 0, z: 0 };
 let cPos = { x: 0.0, y: 0.0, z: 4.0 }; 
 
 // --- File I/O Logic ---
-// Helper to generate a 6-character unique alphanumeric string
 const generateUID = () => Math.random().toString(36).substring(2, 8);
 
-// Create a persistent, hidden file input to ensure the browser dialog always triggers
 const fileInput = document.createElement('input');
 fileInput.type = 'file';
-fileInput.accept = '.json'; 
-fileInput.style.display = 'none';
+// Removing the 'accept' attribute entirely to prevent the OS from greying out the file.
+// fileInput.accept = '.json'; 
+
+// Push it off-screen instead of using display: none, which some browsers block clicks on.
+fileInput.style.position = 'absolute';
+fileInput.style.left = '-9999px';
 document.body.appendChild(fileInput);
 
 fileInput.onchange = e => {
-    if (!e.target.files.length) return; // Cancelled
+    if (!e.target.files.length) return; 
     
     const file = e.target.files[0];
     const reader = new FileReader();
@@ -53,13 +55,11 @@ fileInput.onchange = e => {
         try {
             const state = JSON.parse(readerEvent.target.result);
             
-            // Update UI
             if (state.params) {
                 Object.assign(params, state.params);
                 gui.controllersRecursive().forEach(c => c.updateDisplay());
             }
             
-            // Teleport Camera
             if (state.camera) {
                 tPos = state.camera.pos;
                 cPos = { x: tPos.x, y: tPos.y, z: tPos.z }; 
@@ -71,10 +71,11 @@ fileInput.onchange = e => {
             console.log(`Loaded state ID: ${state.id}`);
         } catch (err) {
             console.error("Failed to parse JSON state file.", err);
+            alert("Could not load file. Please ensure it is a valid fractal JSON state.");
         }
     }
     reader.readAsText(file);
-    e.target.value = ''; // Reset input so you can load the exact same file again if needed
+    e.target.value = ''; 
 };
 
 const ioLogic = {
