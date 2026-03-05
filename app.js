@@ -85,12 +85,11 @@ const fsSource = `#version 300 es
         return length(p) / abs(dr);
     }
 
-    // UPDATED: Epsilon (e) now scales based on distance (t) to smooth out far-away noise
     vec3 getNormal(vec3 p, float t) {
+        // Epsilon scales with distance to reduce high-frequency normal noise
         float eps = max(0.0005, 0.001 * t); 
         vec2 e = vec2(eps, 0.0);
         
-        // Slightly optimized normal calculation
         vec3 n = map(p) - vec3(
             map(p - e.xyy),
             map(p - e.yxy),
@@ -99,35 +98,27 @@ const fsSource = `#version 300 es
         return normalize(n);
     }
 
-    void main() {
-        vec2 uv = (gl_FragCoord.xy * 2.0 - u_resolution.xy) / u_resolution.y;
-        vec3 rd = normalize(uv.x * u_camRight + uv.y * u_camUp + 1.0 * u_camForward); 
-
+    // NEW: We moved the raymarching loop into its own function so we can call it multiple times
+    vec3 getSceneColor(vec3 ro, vec3 rd) {
         float t = 0.0;
-        
-        // UPDATED: Increased max steps for higher quality edges
         int max_steps = 250; 
         float max_dist = 100.0;
+        
+        // Background color
+        vec3 bgCol = vec3(0.02, 0.02, 0.03);
+        vec3 col = bgCol;
 
         for(int i = 0; i < max_steps; i++) {
-            vec3 p = u_ro + rd * t;
+            vec3 p = ro + rd * t;
             float d = map(p);
             
-            // UPDATED: Dynamic hit threshold. Less precision needed far away = less noise.
             if(abs(d) < 0.001 * t || t > max_dist) break;
             
-            // UPDATED: Safe Stepping (0.8). Prevents rays from punching through thin walls.
             t += d * 0.8; 
         }
 
-        // Set a dark ambient background color instead of pitch black
-        vec3 bgCol = vec3(0.02, 0.02, 0.03);
-        vec3 col = bgCol; 
-
         if(t < max_dist) {
-            vec3 p = u_ro + rd * t;       
-            
-            // Pass the distance 't' into the normal calculation
+            vec3 p = ro + rd * t;       
             vec3 n = getNormal(p, t);      
             
             vec3 lightDir = normalize(u_lightPos - p);
@@ -136,17 +127,37 @@ const fsSource = `#version 300 es
             
             col = u_baseColor * (dif + ambient);
             
-            // UPDATED: Rim light now derives from the UI base color and white
             float rim = 1.0 - clamp(dot(-rd, n), 0.0, 1.0);
-            vec3 rimColor = mix(u_baseColor, vec3(1.0), 0.6); // Blend base with white
+            vec3 rimColor = mix(u_baseColor, vec3(1.0), 0.6); 
             col += rimColor * pow(rim, 4.0) * 0.4;
         }
 
-        // NEW: Exponential depth fog. Fades distant geometry into the background color.
         col = mix(col, bgCol, 1.0 - exp(-0.03 * t));
+        return col;
+    }
 
-        col = pow(col, vec3(1.0/2.2)); // Gamma correction
-        outColor = vec4(col, 1.0);
+    void main() {
+        vec3 totalColor = vec3(0.0);
+        
+        // NEW: 2x2 Sub-pixel Anti-Aliasing Loop
+        for(int m = 0; m < 2; m++) {
+            for(int n = 0; n < 2; n++) {
+                // Calculate sub-pixel offset
+                vec2 offset = vec2(float(m), float(n)) / 2.0 - 0.25;
+                
+                // Apply offset to fragment coordinates
+                vec2 uv = (gl_FragCoord.xy + offset * 2.0 - u_resolution.xy) / u_resolution.y;
+                vec3 rd = normalize(uv.x * u_camRight + uv.y * u_camUp + 1.0 * u_camForward); 
+                
+                totalColor += getSceneColor(u_ro, rd);
+            }
+        }
+        
+        // Average the 4 samples
+        totalColor /= 4.0;
+
+        totalColor = pow(totalColor, vec3(1.0/2.2)); // Gamma correction
+        outColor = vec4(totalColor, 1.0);
     }
 `;
 
