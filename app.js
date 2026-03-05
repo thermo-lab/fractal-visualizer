@@ -19,14 +19,13 @@ resizeCanvas();
 const params = {
     scale: 2.0,
     iterations: 12,
-    baseColor: [0.8, 0.4, 0.1], // Copper-ish base
+    baseColor: [0.8, 0.4, 0.1], 
     lightX: 2.0,
     lightY: 3.0,
     lightZ: -2.0
 };
 
 const gui = new GUI({ title: 'Fractal Controls' });
-
 const mathFolder = gui.addFolder('Mathematics');
 mathFolder.add(params, 'scale', -3.0, 3.0).name('Box Scale');
 mathFolder.add(params, 'iterations', 1, 30, 1).name('Iterations');
@@ -52,27 +51,26 @@ const fsSource = `#version 300 es
     uniform vec2 u_resolution;
     uniform float u_time;
     uniform vec3 u_ro; 
-    uniform vec3 u_ta; 
+    
+    // Explicit orientation vectors passed from JS Quaternions
+    uniform vec3 u_camForward;
+    uniform vec3 u_camRight;
+    uniform vec3 u_camUp; 
 
-    // Uniforms from the UI panel
     uniform float u_scale;
     uniform int u_iterations;
     uniform vec3 u_baseColor;
     uniform vec3 u_lightPos;
 
-    // Mandelbox Distance Estimator
     float map(vec3 p) {
         vec3 offset = p;
         float dr = 1.0;
         
-        // Hard loop limit set to 30 to satisfy WebGL compiler strictness
         for (int i = 0; i < 30; i++) {
             if (i >= u_iterations) break; 
             
-            // Box Fold
             p = clamp(p, -1.0, 1.0) * 2.0 - p;
             
-            // Sphere Fold
             float r2 = dot(p, p);
             if (r2 < 0.25) { 
                 p *= 4.0;
@@ -82,11 +80,9 @@ const fsSource = `#version 300 es
                 dr /= r2;
             }
             
-            // Scale & Translate
             p = p * u_scale + offset;
             dr = dr * abs(u_scale) + 1.0;
         }
-        
         return length(p) / abs(dr);
     }
 
@@ -104,11 +100,8 @@ const fsSource = `#version 300 es
     void main() {
         vec2 uv = (gl_FragCoord.xy * 2.0 - u_resolution.xy) / u_resolution.y;
 
-        vec3 ta = u_ta; 
-        vec3 ww = normalize(ta - u_ro); 
-        vec3 uu = normalize(cross(ww, vec3(0.0, 1.0, 0.0))); 
-        vec3 vv = normalize(cross(uu, ww)); 
-        vec3 rd = normalize(uv.x * uu + uv.y * vv + 1.0 * ww); 
+        // Construct Ray Direction directly from quaternion vectors
+        vec3 rd = normalize(uv.x * u_camRight + uv.y * u_camUp + 1.0 * u_camForward); 
 
         float t = 0.0;
         int max_steps = 150;
@@ -129,17 +122,15 @@ const fsSource = `#version 300 es
             vec3 n = getNormal(p);      
             
             vec3 lightDir = normalize(u_lightPos - p);
-            
             float dif = clamp(dot(n, lightDir), 0.0, 1.0);
             float ambient = 0.1;
             
             col = u_baseColor * (dif + ambient);
-            
             float rim = 1.0 - clamp(dot(-rd, n), 0.0, 1.0);
             col += vec3(0.2, 0.1, 0.0) * pow(rim, 4.0);
         }
 
-        col = pow(col, vec3(1.0/2.2)); // Gamma Correction
+        col = pow(col, vec3(1.0/2.2)); 
         outColor = vec4(col, 1.0);
     }
 `;
@@ -166,21 +157,21 @@ gl.useProgram(program);
 
 const positionBuffer = gl.createBuffer();
 gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-const positions = new Float32Array([
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
     -1.0, -1.0,   1.0, -1.0,  -1.0,  1.0,
     -1.0,  1.0,   1.0, -1.0,   1.0,  1.0
-]);
-gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+]), gl.STATIC_DRAW);
 
 const positionLocation = gl.getAttribLocation(program, 'a_position');
 gl.enableVertexAttribArray(positionLocation);
 gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
 
-// Fetch Uniform Locations
 const resolutionLocation = gl.getUniformLocation(program, 'u_resolution');
 const timeLocation = gl.getUniformLocation(program, 'u_time');
 const roLocation = gl.getUniformLocation(program, 'u_ro');
-const taLocation = gl.getUniformLocation(program, 'u_ta');
+const fwdLocation = gl.getUniformLocation(program, 'u_camForward');
+const rightLocation = gl.getUniformLocation(program, 'u_camRight');
+const upLocation = gl.getUniformLocation(program, 'u_camUp');
 const scaleLocation = gl.getUniformLocation(program, 'u_scale');
 const iterationsLocation = gl.getUniformLocation(program, 'u_iterations');
 const baseColorLocation = gl.getUniformLocation(program, 'u_baseColor');
@@ -244,21 +235,35 @@ const Quat = {
 // --- First-Person Camera State ---
 let isLooking = false;
 let isPanning = false;
+let isRolling = false;
+let lastRollAngle = 0;
 let lastInput = { x: 0, y: 0 };
 let lastTouchDistance = 0;
 let lastTouchCenter = { x: 0, y: 0 };
 
-let tRot = { w: 1, x: 0, y: 0, z: 0 }; // Target Rotation
-let tPos = { x: 0.0, y: 0.0, z: 4.0 }; // Target Position
-
-let cRot = { w: 1, x: 0, y: 0, z: 0 }; // Current Rotation
-let cPos = { x: 0.0, y: 0.0, z: 4.0 }; // Current Position
+let tRot = { w: 1, x: 0, y: 0, z: 0 }; 
+let tPos = { x: 0.0, y: 0.0, z: 4.0 }; 
+let cRot = { w: 1, x: 0, y: 0, z: 0 }; 
+let cPos = { x: 0.0, y: 0.0, z: 4.0 }; 
 
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 
 // --- Mouse Events ---
 canvas.addEventListener('mousedown', (e) => {
-    if (e.button === 0) isLooking = true; 
+    if (e.button === 0) {
+        let cx = canvas.width / 2;
+        let cy = canvas.height / 2;
+        let dx = e.offsetX - cx;
+        let dy = e.offsetY - cy;
+        
+        // If clicked in the outer 25% of the screen, trigger Roll
+        if (Math.hypot(dx, dy) > Math.min(cx, cy) * 0.75) {
+            isRolling = true;
+            lastRollAngle = Math.atan2(dy, dx);
+        } else {
+            isLooking = true;
+        }
+    }
     if (e.button === 2) isPanning = true; 
     lastInput = { x: e.offsetX, y: e.offsetY };
 });
@@ -267,19 +272,35 @@ canvas.addEventListener('mousemove', (e) => {
     let deltaX = e.offsetX - lastInput.x;
     let deltaY = e.offsetY - lastInput.y;
 
-    if (isLooking) {
+    if (isRolling) {
+        let cx = canvas.width / 2;
+        let cy = canvas.height / 2;
+        let newAngle = Math.atan2(e.offsetY - cy, e.offsetX - cx);
+        let dAngle = newAngle - lastRollAngle;
+        
+        // Handle 360 wrap-around
+        if (dAngle > Math.PI) dAngle -= Math.PI * 2;
+        if (dAngle < -Math.PI) dAngle += Math.PI * 2;
+
+        let qRoll = Quat.fromAxisAngle([0, 0, 1], dAngle);
+        tRot = Quat.normalize(Quat.multiply(tRot, qRoll)); // Local roll
+        lastRollAngle = newAngle;
+    } 
+    else if (isLooking) {
         let qYaw = Quat.fromAxisAngle([0, 1, 0], -deltaX * 0.005);
         let qPitch = Quat.fromAxisAngle([1, 0, 0], -deltaY * 0.005);
         
-        let qTurn = Quat.multiply(qYaw, qPitch);
-        tRot = Quat.normalize(Quat.multiply(tRot, qTurn));
+        tRot = Quat.multiply(tRot, qPitch); // Local Pitch
+        tRot = Quat.multiply(qYaw, tRot);   // Global Yaw
+        tRot = Quat.normalize(tRot);
     }
 
     if (isPanning) handlePan(deltaX, deltaY);
     lastInput = { x: e.offsetX, y: e.offsetY };
 });
 
-window.addEventListener('mouseup', () => { isLooking = false; isPanning = false; }); 
+window.addEventListener('mouseup', () => { isLooking = false; isPanning = false; isRolling = false; }); 
+canvas.addEventListener('mouseleave', () => { isLooking = false; isPanning = false; isRolling = false; });
 
 canvas.addEventListener('wheel', (e) => {
     e.preventDefault(); 
@@ -291,10 +312,21 @@ canvas.addEventListener('wheel', (e) => {
 canvas.addEventListener('touchstart', (e) => {
     e.preventDefault();
     if (e.touches.length === 1) {
-        isLooking = true;
+        let cx = canvas.width / 2;
+        let cy = canvas.height / 2;
+        let dx = e.touches[0].clientX - cx;
+        let dy = e.touches[0].clientY - cy;
+        
+        if (Math.hypot(dx, dy) > Math.min(cx, cy) * 0.75) {
+            isRolling = true;
+            lastRollAngle = Math.atan2(dy, dx);
+        } else {
+            isLooking = true;
+        }
         lastInput = { x: e.touches[0].clientX, y: e.touches[0].clientY };
     } else if (e.touches.length === 2) {
         isLooking = false;
+        isRolling = false;
         isPanning = true;
         lastTouchDistance = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
         lastTouchCenter = { x: (e.touches[0].clientX + e.touches[1].clientX) / 2, y: (e.touches[0].clientY + e.touches[1].clientY) / 2 };
@@ -303,16 +335,31 @@ canvas.addEventListener('touchstart', (e) => {
 
 canvas.addEventListener('touchmove', (e) => {
     e.preventDefault();
-    if (e.touches.length === 1 && isLooking) {
-        let deltaX = e.touches[0].clientX - lastInput.x;
-        let deltaY = e.touches[0].clientY - lastInput.y;
-        
-        let qYaw = Quat.fromAxisAngle([0, 1, 0], -deltaX * 0.005);
-        let qPitch = Quat.fromAxisAngle([1, 0, 0], deltaY * 0.005); // Inverted Y-axis fix 
-        
-        let qTurn = Quat.multiply(qYaw, qPitch);
-        tRot = Quat.normalize(Quat.multiply(tRot, qTurn));
-        
+    if (e.touches.length === 1) {
+        if (isRolling) {
+            let cx = canvas.width / 2;
+            let cy = canvas.height / 2;
+            let newAngle = Math.atan2(e.touches[0].clientY - cy, e.touches[0].clientX - cx);
+            let dAngle = newAngle - lastRollAngle;
+            
+            if (dAngle > Math.PI) dAngle -= Math.PI * 2;
+            if (dAngle < -Math.PI) dAngle += Math.PI * 2;
+            
+            let qRoll = Quat.fromAxisAngle([0, 0, 1], dAngle);
+            tRot = Quat.normalize(Quat.multiply(tRot, qRoll));
+            lastRollAngle = newAngle;
+        } 
+        else if (isLooking) {
+            let deltaX = e.touches[0].clientX - lastInput.x;
+            let deltaY = e.touches[0].clientY - lastInput.y;
+            
+            let qYaw = Quat.fromAxisAngle([0, 1, 0], -deltaX * 0.005);
+            let qPitch = Quat.fromAxisAngle([1, 0, 0], deltaY * 0.005); // Touch inverted Y fix
+            
+            tRot = Quat.multiply(tRot, qPitch); 
+            tRot = Quat.multiply(qYaw, tRot);   
+            tRot = Quat.normalize(tRot);
+        }
         lastInput = { x: e.touches[0].clientX, y: e.touches[0].clientY };
     } 
     else if (e.touches.length === 2 && isPanning) {
@@ -330,13 +377,16 @@ canvas.addEventListener('touchmove', (e) => {
 canvas.addEventListener('touchend', (e) => {
     e.preventDefault();
     if (e.touches.length < 2) isPanning = false;
-    if (e.touches.length === 0) isLooking = false;
+    if (e.touches.length === 0) {
+        isLooking = false;
+        isRolling = false;
+    }
     if (e.touches.length === 1) {
         lastInput = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-        isLooking = true;
+        isLooking = true; // Default back to looking if one finger lifts
     }
 });
-canvas.addEventListener('touchcancel', () => { isLooking = false; isPanning = false; });
+canvas.addEventListener('touchcancel', () => { isLooking = false; isPanning = false; isRolling = false; });
 
 
 // --- Movement Calculations ---
@@ -364,13 +414,11 @@ function render(time) {
     gl.uniform2f(resolutionLocation, canvas.width, canvas.height);
     gl.uniform1f(timeLocation, time);
 
-    // Feed UI Data to GPU
     gl.uniform1f(scaleLocation, params.scale);
     gl.uniform1i(iterationsLocation, params.iterations);
     gl.uniform3f(baseColorLocation, params.baseColor[0], params.baseColor[1], params.baseColor[2]);
     gl.uniform3f(lightPosLocation, params.lightX, params.lightY, params.lightZ);
 
-    // Camera Interpolation (Easing)
     let lerpSpeed = 0.1;
     cPos.x += (tPos.x - cPos.x) * lerpSpeed;
     cPos.y += (tPos.y - cPos.y) * lerpSpeed;
@@ -378,14 +426,14 @@ function render(time) {
     
     cRot = Quat.slerp(cRot, tRot, lerpSpeed);
 
-    // Calculate Look Target
     let fwd = Quat.rotateVec3(cRot, [0, 0, -1]);
-    let targetX = cPos.x + fwd.x;
-    let targetY = cPos.y + fwd.y;
-    let targetZ = cPos.z + fwd.z;
+    let right = Quat.rotateVec3(cRot, [1, 0, 0]);
+    let up = Quat.rotateVec3(cRot, [0, 1, 0]);
 
     gl.uniform3f(roLocation, cPos.x, cPos.y, cPos.z);
-    gl.uniform3f(taLocation, targetX, targetY, targetZ);
+    gl.uniform3f(fwdLocation, fwd.x, fwd.y, fwd.z);
+    gl.uniform3f(rightLocation, right.x, right.y, right.z);
+    gl.uniform3f(upLocation, up.x, up.y, up.z);
 
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     requestAnimationFrame(render);
