@@ -375,24 +375,36 @@ const fsAccum = `#version 300 es
     uniform float u_frame;
     uniform vec2 u_jitter;
 
-    // NEW: Map function now returns a vec2(distance, orbit_trap)
+    // NEW: Map function using a Structural/Kinetic Accumulation Trap
     vec2 map(vec3 p) {
         vec3 offset = p;
         float dr = 1.0;
-        float trap = 1e20; // Initialize trap
+        
+        // Start the trap at 0 instead of a massive number
+        float trap = 0.0; 
 
         for (int i = 0; i < 30; i++) {
             if (i >= u_iterations) break; 
+            
+            // Remember where the point was before we folded it
+            vec3 prevP = p; 
+            
             p = clamp(p, -1.0, 1.0) * 2.0 - p;
+            
             float r2 = dot(p, p);
             if (r2 < 0.25) { p *= 4.0; dr *= 4.0; } 
             else if (r2 < 1.0) { p /= r2; dr /= r2; }
+            
             p = p * u_scale + offset;
             dr = dr * abs(u_scale) + 1.0;
             
-            // Track the point's minimum distance to the origin
-            trap = min(trap, length(p));
+            // STRUCTURAL TRAP: Measure how violently the point was deformed
+            trap += length(p - prevP); 
         }
+        
+        // Average the accumulated chaos so it plays nicely with our color wrap slider
+        trap = trap / float(u_iterations);
+        
         return vec2(length(p) / abs(dr), trap);
     }
 
