@@ -686,7 +686,7 @@ function render(time) {
         isDirty = true;
     }
 
-    // 1. Camera Interpolation
+// 1. Camera Interpolation
     cPos.x += (tPos.x - cPos.x) * 0.1;
     cPos.y += (tPos.y - cPos.y) * 0.1;
     cPos.z += (tPos.z - cPos.z) * 0.1;
@@ -701,8 +701,11 @@ function render(time) {
         cRot = { w: tRot.w, x: tRot.x, y: tRot.y, z: tRot.z };
     }
 
-    // 3. Movement Detection (Now strictly looks for > 0 because of the snap)
-    if (Math.abs(tPos.x - cPos.x) > 0 || Math.abs(tRot.x - cRot.x) > 0 || isLooking || isPanning || isRolling || isDirty) {
+    // 3. Movement Detection (FIXED: Now checking X, Y, and Z axes)
+    let isMovingPos = Math.abs(tPos.x - cPos.x) > 0 || Math.abs(tPos.y - cPos.y) > 0 || Math.abs(tPos.z - cPos.z) > 0;
+    let isMovingRot = Math.abs(tRot.x - cRot.x) > 0 || Math.abs(tRot.y - cRot.y) > 0 || Math.abs(tRot.z - cRot.z) > 0;
+
+    if (isMovingPos || isMovingRot || isLooking || isPanning || isRolling || isDirty) {
         frameCount = 0;
         isDirty = false;
     }
