@@ -686,16 +686,29 @@ function render(time) {
         isDirty = true;
     }
 
-    cPos.x += (tPos.x - cPos.x) * 0.1; cPos.y += (tPos.y - cPos.y) * 0.1; cPos.z += (tPos.z - cPos.z) * 0.1;
+    // 1. Camera Interpolation
+    cPos.x += (tPos.x - cPos.x) * 0.1;
+    cPos.y += (tPos.y - cPos.y) * 0.1;
+    cPos.z += (tPos.z - cPos.z) * 0.1;
     cRot = Quat.slerp(cRot, tRot, 0.1);
 
-    if (Math.abs(tPos.x - cPos.x) > 0.0001 || Math.abs(tRot.x - cRot.x) > 0.0001 || isLooking || isPanning || isRolling || isDirty) {
-        frameCount = 0; isDirty = false;
+    // 2. Kill the "Lerp Tail" by snapping to target when microscopically close
+    if (Math.abs(tPos.x - cPos.x) < 0.001) cPos.x = tPos.x;
+    if (Math.abs(tPos.y - cPos.y) < 0.001) cPos.y = tPos.y;
+    if (Math.abs(tPos.z - cPos.z) < 0.001) cPos.z = tPos.z;
+
+    if (Math.abs(tRot.x - cRot.x) < 0.001 && Math.abs(tRot.y - cRot.y) < 0.001 && Math.abs(tRot.z - cRot.z) < 0.001) {
+        cRot = { w: tRot.w, x: tRot.x, y: tRot.y, z: tRot.z };
+    }
+
+    // 3. Movement Detection (Now strictly looks for > 0 because of the snap)
+    if (Math.abs(tPos.x - cPos.x) > 0 || Math.abs(tRot.x - cRot.x) > 0 || isLooking || isPanning || isRolling || isDirty) {
+        frameCount = 0;
+        isDirty = false;
     }
 
     // ONLY run the heavy raymarching shader if we haven't hit our quality cap yet
     if (frameCount < params.previewSamples) {
-        gl.viewport(0, 0, canvas.width, canvas.height);
 
         let jx = frameCount === 0 ? 0 : hash(frameCount * 12.9898) - 0.5;
         let jy = frameCount === 0 ? 0 : hash(frameCount * 78.2330) - 0.5;
