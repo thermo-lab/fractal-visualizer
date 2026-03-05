@@ -1,19 +1,19 @@
 import GUI from 'https://cdn.jsdelivr.net/npm/lil-gui@0.19/+esm';
 
 const canvas = document.getElementById('glcanvas');
-const gl = canvas.getContext('webgl2', { preserveDrawingBuffer: true }); 
+const gl = canvas.getContext('webgl2', { preserveDrawingBuffer: true });
 
 if (!gl) alert('WebGL2 is not supported by your browser.');
 
 // --- State Variables ---
 let isDirty = true;
 let frameCount = 0;
-let isExporting = false; 
+let isExporting = false;
 
-let tRot = { w: 1, x: 0, y: 0, z: 0 }; 
-let tPos = { x: 0.0, y: 0.0, z: 4.0 }; 
-let cRot = { w: 1, x: 0, y: 0, z: 0 }; 
-let cPos = { x: 0.0, y: 0.0, z: 4.0 }; 
+let tRot = { w: 1, x: 0, y: 0, z: 0 };
+let tPos = { x: 0.0, y: 0.0, z: 4.0 };
+let cRot = { w: 1, x: 0, y: 0, z: 0 };
+let cPos = { x: 0.0, y: 0.0, z: 4.0 };
 
 let isLooking = false, isPanning = false, isRolling = false;
 let lastRollAngle = 0, lastInput = { x: 0, y: 0 };
@@ -49,16 +49,16 @@ document.body.appendChild(exportOverlay);
 const params = {
     scale: 2.0,
     iterations: 12,
-    baseColor: [0.8, 0.4, 0.1], 
-    bgColor: [0.02, 0.02, 0.03], 
+    baseColor: [0.8, 0.4, 0.1],
+    bgColor: [0.02, 0.02, 0.03],
     brightness: 1.2,
     lightX: 2.0,
     lightY: 3.0,
     lightZ: -2.0,
     showCrop: false,
-    exportWidth: 7200, 
+    exportWidth: 7200,
     exportHeight: 10800,
-    exportSamples: 60  
+    exportSamples: 60
 };
 
 function updateCropGuide() {
@@ -67,10 +67,10 @@ function updateCropGuide() {
         return;
     }
     cropGuide.style.display = 'block';
-    
+
     const targetAspect = params.exportWidth / params.exportHeight;
     const windowAspect = window.innerWidth / window.innerHeight;
-    
+
     let w, h;
     if (windowAspect > targetAspect) {
         h = window.innerHeight * 0.9;
@@ -79,7 +79,7 @@ function updateCropGuide() {
         w = window.innerWidth * 0.9;
         h = w / targetAspect;
     }
-    
+
     cropGuide.style.width = `${w}px`;
     cropGuide.style.height = `${h}px`;
 }
@@ -92,7 +92,7 @@ function resizeCanvas() {
     isDirty = true;
 }
 window.addEventListener('resize', resizeCanvas);
-resizeCanvas(); 
+resizeCanvas();
 
 // --- File I/O & Export Logic ---
 const generateUID = () => Math.random().toString(36).substring(2, 8);
@@ -104,7 +104,7 @@ fileInput.style.left = '-9999px';
 document.body.appendChild(fileInput);
 
 fileInput.onchange = e => {
-    if (!e.target.files.length) return; 
+    if (!e.target.files.length) return;
     const file = e.target.files[0];
     const reader = new FileReader();
     reader.onload = readerEvent => {
@@ -112,17 +112,16 @@ fileInput.onchange = e => {
             const state = JSON.parse(readerEvent.target.result);
             if (state.params) { Object.assign(params, state.params); gui.controllersRecursive().forEach(c => c.updateDisplay()); updateCropGuide(); }
             if (state.camera) {
-                tPos = state.camera.pos; cPos = { x: tPos.x, y: tPos.y, z: tPos.z }; 
-                tRot = state.camera.rot; cRot = { w: tRot.w, x: tRot.x, y: tRot.y, z: tRot.z }; 
+                tPos = state.camera.pos; cPos = { x: tPos.x, y: tPos.y, z: tPos.z };
+                tRot = state.camera.rot; cRot = { w: tRot.w, x: tRot.x, y: tRot.y, z: tRot.z };
             }
             isDirty = true;
         } catch (err) { alert("Invalid state file."); }
     }
     reader.readAsText(file);
-    e.target.value = ''; 
+    e.target.value = '';
 };
 
-// Isolated FBO creation strictly for tiled export
 function createExportFBOs(w, h) {
     const createFloatTex = () => {
         const tex = gl.createTexture();
@@ -133,13 +132,11 @@ function createExportFBOs(w, h) {
         return tex;
     };
 
-    // Half-float buffers for accumulation
     const tA = createFloatTex(), tB = createFloatTex();
     const fA = gl.createFramebuffer(), fB = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, fA); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tA, 0);
     gl.bindFramebuffer(gl.FRAMEBUFFER, fB); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tB, 0);
 
-    // Standard 8-bit buffer for final pixel extraction
     const tFinal = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tFinal);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
@@ -188,7 +185,6 @@ async function exportHighResImage() {
                 let readTex = exp.tB;
                 let writeFbo = exp.fA;
 
-                // 1. Accumulate TAA Samples
                 for (let s = 0; s < params.exportSamples; s++) {
                     drawExportFrame(totalW, totalH, x * tileSize, y * tileSize, s, tileSize, tileSize, writeFbo, readTex);
 
@@ -198,7 +194,6 @@ async function exportHighResImage() {
                     if (s % 10 === 0) await new Promise(r => setTimeout(r, 5));
                 }
 
-                // 2. Pass the accumulated float texture through the screen shader for Gamma Correction
                 let finalFloatTex = writeFbo === exp.fA ? exp.tB : exp.tA;
 
                 gl.bindFramebuffer(gl.FRAMEBUFFER, exp.fFinal);
@@ -212,11 +207,9 @@ async function exportHighResImage() {
                 gl.uniform1i(gl.getUniformLocation(screenProgram, 'u_texture'), 0);
                 gl.drawArrays(gl.TRIANGLES, 0, 6);
 
-                // 3. Extract perfectly formatted 8-bit pixels
                 const pixels = new Uint8Array(curW * curH * 4);
                 gl.readPixels(0, 0, curW, curH, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
 
-                // Flip Y-axis mapping to canvas
                 const imageData = ctx.createImageData(curW, curH);
                 for (let i = 0; i < curH; i++) {
                     const srcOffset = (curH - 1 - i) * curW * 4;
@@ -238,10 +231,7 @@ async function exportHighResImage() {
         await new Promise(r => setTimeout(r, 100));
 
         finalCanvas.toBlob((blob) => {
-            if(!blob) {
-                alert("Image too large to encode to PNG! Try lowering the resolution.");
-                return;
-            }
+            if(!blob) { alert("Image too large to encode to PNG! Try lowering the resolution."); return; }
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -259,7 +249,6 @@ async function exportHighResImage() {
         }
         isExporting = false;
         exportOverlay.style.display = 'none';
-
         gl.viewport(0, 0, canvas.width, canvas.height);
         isDirty = true;
     }
@@ -413,7 +402,10 @@ const fsAccum = `#version 300 es
 
     void main() {
         vec2 globalCoord = gl_FragCoord.xy + u_tileOffset;
-        vec2 uv = (globalCoord + u_jitter - u_targetResolution.xy) / u_targetResolution.y;
+        
+        // FIXED: The missing * 2.0 that corrects the projection centering and aligns the tiles!
+        vec2 uv = ((globalCoord + u_jitter) * 2.0 - u_targetResolution.xy) / u_targetResolution.y;
+        
         vec3 rd = normalize(uv.x * u_camRight + uv.y * u_camUp + 1.0 * u_camForward); 
         
         vec3 col = getSceneColor(u_ro, rd);
@@ -431,20 +423,19 @@ const fsAccum = `#version 300 es
 
 const vsScreen = `#version 300 es
     in vec2 a_position;
-    out vec2 v_uv;
     void main() {
-        v_uv = a_position * 0.5 + 0.5;
         gl_Position = vec4(a_position, 0.0, 1.0);
     }
 `;
 
 const fsScreen = `#version 300 es
     precision highp float;
-    in vec2 v_uv;
     out vec4 outColor;
     uniform sampler2D u_texture;
     void main() {
-        vec3 col = texture(u_texture, v_uv).rgb;
+        // FIXED: Direct gl_FragCoord pixel fetching stops the tiles from bleeding at the edges
+        vec2 uv = gl_FragCoord.xy / vec2(textureSize(u_texture, 0));
+        vec3 col = texture(u_texture, uv).rgb;
         col = pow(col, vec3(1.0/2.2)); 
         outColor = vec4(col, 1.0);
     }
@@ -465,7 +456,7 @@ const accumProgram = compileProgram(vsAccum, fsAccum);
 const screenProgram = compileProgram(vsScreen, fsScreen);
 
 // --- WebGL Main Viewport FBO Setup ---
-gl.getExtension('EXT_color_buffer_float'); 
+gl.getExtension('EXT_color_buffer_float');
 
 const positionBuffer = gl.createBuffer();
 gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
@@ -538,30 +529,31 @@ canvas.addEventListener('contextmenu', e => e.preventDefault());
 canvas.addEventListener('mousedown', (e) => {
     if (e.button === 0) {
         let borderSize = Math.min(canvas.width, canvas.height) * 0.18;
-        let isEdgeX = e.offsetX < borderSize || e.offsetX > canvas.width - borderSize;
-        let isEdgeY = e.offsetY < borderSize || e.offsetY > canvas.height - borderSize;
-        if (isEdgeX || isEdgeY) { isRolling = true; lastRollAngle = Math.atan2(e.offsetY - canvas.height / 2, e.offsetX - canvas.width / 2); } 
+        // FIXED: Using clientX/Y perfectly aligns the mouse interactions to the window box model
+        let isEdgeX = e.clientX < borderSize || e.clientX > canvas.width - borderSize;
+        let isEdgeY = e.clientY < borderSize || e.clientY > canvas.height - borderSize;
+        if (isEdgeX || isEdgeY) { isRolling = true; lastRollAngle = Math.atan2(e.clientY - canvas.height / 2, e.clientX - canvas.width / 2); }
         else { isLooking = true; }
     }
-    if (e.button === 2) isPanning = true; 
-    lastInput = { x: e.offsetX, y: e.offsetY };
+    if (e.button === 2) isPanning = true;
+    lastInput = { x: e.clientX, y: e.clientY };
 });
 canvas.addEventListener('mousemove', (e) => {
-    let deltaX = e.offsetX - lastInput.x; let deltaY = e.offsetY - lastInput.y;
+    let deltaX = e.clientX - lastInput.x; let deltaY = e.clientY - lastInput.y;
     if (isRolling) {
-        let newAngle = Math.atan2(e.offsetY - canvas.height / 2, e.offsetX - canvas.width / 2);
+        let newAngle = Math.atan2(e.clientY - canvas.height / 2, e.clientX - canvas.width / 2);
         let dAngle = newAngle - lastRollAngle;
         if (dAngle > Math.PI) dAngle -= Math.PI * 2; if (dAngle < -Math.PI) dAngle += Math.PI * 2;
-        tRot = Quat.normalize(Quat.multiply(tRot, Quat.fromAxisAngle([0, 0, 1], dAngle))); 
+        tRot = Quat.normalize(Quat.multiply(tRot, Quat.fromAxisAngle([0, 0, 1], dAngle)));
         lastRollAngle = newAngle;
     } else if (isLooking) {
         let qTurn = Quat.multiply(Quat.fromAxisAngle([0, 1, 0], -deltaX * 0.005), Quat.fromAxisAngle([1, 0, 0], -deltaY * 0.005));
         tRot = Quat.normalize(Quat.multiply(tRot, qTurn));
     }
     if (isPanning) handlePan(deltaX, deltaY);
-    lastInput = { x: e.offsetX, y: e.offsetY };
+    lastInput = { x: e.clientX, y: e.clientY };
 });
-window.addEventListener('mouseup', () => { isLooking = false; isPanning = false; isRolling = false; }); 
+window.addEventListener('mouseup', () => { isLooking = false; isPanning = false; isRolling = false; });
 canvas.addEventListener('mouseleave', () => { isLooking = false; isPanning = false; isRolling = false; });
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); handleForwardMovement(-e.deltaY * 0.005); }, { passive: false });
 
@@ -596,8 +588,8 @@ canvas.addEventListener('touchmove', (e) => {
     } else if (e.touches.length === 2 && isPanning) {
         const currentDistance = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
         const currentCenter = { x: (e.touches[0].clientX + e.touches[1].clientX) / 2, y: (e.touches[0].clientY + e.touches[1].clientY) / 2 };
-        handleForwardMovement((currentDistance - lastTouchDistance) * 0.01); 
-        handlePan(currentCenter.x - lastTouchCenter.x, currentCenter.y - lastTouchCenter.y); 
+        handleForwardMovement((currentDistance - lastTouchDistance) * 0.01);
+        handlePan(currentCenter.x - lastTouchCenter.x, currentCenter.y - lastTouchCenter.y);
         lastTouchDistance = currentDistance; lastTouchCenter = currentCenter;
     }
 }, { passive: false });
@@ -665,7 +657,7 @@ let texWidth = canvas.width, texHeight = canvas.height;
 function render(time) {
     if (isExporting) {
         requestAnimationFrame(render);
-        return; // Halt viewport rendering to free GPU for the export engine
+        return;
     }
 
     if (canvas.width !== texWidth || canvas.height !== texHeight) {
@@ -681,11 +673,9 @@ function render(time) {
         frameCount = 0; isDirty = false;
     }
 
-    // Accumulate Viewport
     gl.viewport(0, 0, canvas.width, canvas.height);
     drawExportFrame(canvas.width, canvas.height, 0, 0, frameCount, canvas.width, canvas.height, fboA, texB);
 
-    // Draw Viewport to Screen
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.useProgram(screenProgram);
     let screenPosLoc = gl.getAttribLocation(screenProgram, 'a_position');
@@ -699,7 +689,7 @@ function render(time) {
 
     let tempTex = texA; texA = texB; texB = tempTex;
     let tempFbo = fboA; fboA = fboB; fboB = tempFbo;
-    
+
     frameCount++;
     requestAnimationFrame(render);
 }
