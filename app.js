@@ -34,46 +34,68 @@ let cRot = { w: 1, x: 0, y: 0, z: 0 };
 let cPos = { x: 0.0, y: 0.0, z: 4.0 }; 
 
 // --- File I/O Logic ---
-const ioLogic = {
-    saveState: () => {
-        const state = {
-            params: params,
-            camera: { pos: tPos, rot: tRot }
-        };
-        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(state, null, 2));
-        const downloadAnchorNode = document.createElement('a');
-        downloadAnchorNode.setAttribute("href", dataStr);
-        downloadAnchorNode.setAttribute("download", "fractal_state.json");
-        document.body.appendChild(downloadAnchorNode); 
-        downloadAnchorNode.click();
-        downloadAnchorNode.remove();
-    },
-    loadState: () => {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = 'application/json';
-        input.onchange = e => {
-            const file = e.target.files[0];
-            const reader = new FileReader();
-            reader.onload = readerEvent => {
-                const state = JSON.parse(readerEvent.target.result);
-                
-                // 1. Update the UI parameters
+// Helper to generate a 6-character unique alphanumeric string
+const generateUID = () => Math.random().toString(36).substring(2, 8);
+
+// Create a persistent, hidden file input to ensure the browser dialog always triggers
+const fileInput = document.createElement('input');
+fileInput.type = 'file';
+fileInput.accept = '.json'; 
+fileInput.style.display = 'none';
+document.body.appendChild(fileInput);
+
+fileInput.onchange = e => {
+    if (!e.target.files.length) return; // Cancelled
+    
+    const file = e.target.files[0];
+    const reader = new FileReader();
+    reader.onload = readerEvent => {
+        try {
+            const state = JSON.parse(readerEvent.target.result);
+            
+            // Update UI
+            if (state.params) {
                 Object.assign(params, state.params);
-                
-                // Force the lil-gui sliders and color pickers to visually update
                 gui.controllersRecursive().forEach(c => c.updateDisplay());
-                
-                // 2. Teleport the camera instantly
+            }
+            
+            // Teleport Camera
+            if (state.camera) {
                 tPos = state.camera.pos;
                 cPos = { x: tPos.x, y: tPos.y, z: tPos.z }; 
                 
                 tRot = state.camera.rot;
                 cRot = { w: tRot.w, x: tRot.x, y: tRot.y, z: tRot.z }; 
             }
-            reader.readAsText(file);
+            
+            console.log(`Loaded state ID: ${state.id}`);
+        } catch (err) {
+            console.error("Failed to parse JSON state file.", err);
         }
-        input.click();
+    }
+    reader.readAsText(file);
+    e.target.value = ''; // Reset input so you can load the exact same file again if needed
+};
+
+const ioLogic = {
+    saveState: () => {
+        const uid = generateUID();
+        const state = {
+            id: uid, // Bake the ID into the file for later image matching
+            params: params,
+            camera: { pos: tPos, rot: tRot }
+        };
+        
+        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(state, null, 2));
+        const downloadAnchorNode = document.createElement('a');
+        downloadAnchorNode.setAttribute("href", dataStr);
+        downloadAnchorNode.setAttribute("download", `fractal_${uid}.json`);
+        document.body.appendChild(downloadAnchorNode); 
+        downloadAnchorNode.click();
+        downloadAnchorNode.remove();
+    },
+    loadState: () => {
+        fileInput.click();
     }
 };
 
