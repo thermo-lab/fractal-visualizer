@@ -27,21 +27,29 @@ const params = {
     lightZ: -2.0
 };
 
-// --- Camera State ---
+// --- Camera & Input State ---
 let tRot = { w: 1, x: 0, y: 0, z: 0 }; 
 let tPos = { x: 0.0, y: 0.0, z: 4.0 }; 
 let cRot = { w: 1, x: 0, y: 0, z: 0 }; 
 let cPos = { x: 0.0, y: 0.0, z: 4.0 }; 
+
+let isLooking = false;
+let isPanning = false;
+let isRolling = false;
+let lastRollAngle = 0;
+let lastInput = { x: 0, y: 0 };
+let lastTouchDistance = 0;
+let lastTouchCenter = { x: 0, y: 0 };
+
+// --- Global Dirty Flag for TAA ---
+let isDirty = true;
+let frameCount = 0;
 
 // --- File I/O Logic ---
 const generateUID = () => Math.random().toString(36).substring(2, 8);
 
 const fileInput = document.createElement('input');
 fileInput.type = 'file';
-// Removing the 'accept' attribute entirely to prevent the OS from greying out the file.
-// fileInput.accept = '.json'; 
-
-// Push it off-screen instead of using display: none, which some browsers block clicks on.
 fileInput.style.position = 'absolute';
 fileInput.style.left = '-9999px';
 document.body.appendChild(fileInput);
@@ -54,21 +62,17 @@ fileInput.onchange = e => {
     reader.onload = readerEvent => {
         try {
             const state = JSON.parse(readerEvent.target.result);
-            
             if (state.params) {
                 Object.assign(params, state.params);
                 gui.controllersRecursive().forEach(c => c.updateDisplay());
             }
-            
             if (state.camera) {
                 tPos = state.camera.pos;
                 cPos = { x: tPos.x, y: tPos.y, z: tPos.z }; 
-                
                 tRot = state.camera.rot;
                 cRot = { w: tRot.w, x: tRot.x, y: tRot.y, z: tRot.z }; 
             }
-            
-            console.log(`Loaded state ID: ${state.id}`);
+            isDirty = true; // Trigger a clean re-render
         } catch (err) {
             console.error("Failed to parse JSON state file.", err);
             alert("Could not load file. Please ensure it is a valid fractal JSON state.");
@@ -82,11 +86,10 @@ const ioLogic = {
     saveState: () => {
         const uid = generateUID();
         const state = {
-            id: uid, // Bake the ID into the file for later image matching
+            id: uid, 
             params: params,
             camera: { pos: tPos, rot: tRot }
         };
-        
         const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(state, null, 2));
         const downloadAnchorNode = document.createElement('a');
         downloadAnchorNode.setAttribute("href", dataStr);
@@ -95,9 +98,7 @@ const ioLogic = {
         downloadAnchorNode.click();
         downloadAnchorNode.remove();
     },
-    loadState: () => {
-        fileInput.click();
-    }
+    loadState: () => { fileInput.click(); }
 };
 
 // --- GUI Setup ---
@@ -119,14 +120,10 @@ const ioFolder = gui.addFolder('Import / Export');
 ioFolder.add(ioLogic, 'saveState').name('Save State (JSON)');
 ioFolder.add(ioLogic, 'loadState').name('Load State (JSON)');
 
-// --- Global Dirty Flag for TAA ---
-let isDirty = true;
-let frameCount = 0;
-
-// Tell the GUI to reset the accumulation if any slider is touched
+// Tell the TAA engine to reset if you touch ANY slider
 gui.onChange(() => { isDirty = true; });
 
-// --- 1. The Accumulation Shader (Renders Fractal & Blends History) ---
+// --- 1. The Accumulation Shader ---
 const vsAccum = `#version 300 es
     in vec2 a_position;
     void main() { gl_Position = vec4(a_position, 0.0, 1.0); }
@@ -150,7 +147,6 @@ const fsAccum = `#version 300 es
     uniform float u_brightness;
     uniform vec3 u_lightPos;
 
-    // TAA Uniforms
     uniform sampler2D u_prevFrame;
     uniform float u_frame;
     uniform vec2 u_jitter;
@@ -232,14 +228,13 @@ const fsAccum = `#version 300 es
     }
 
     void main() {
-        // Apply sub-pixel jitter
         vec2 uv = (gl_FragCoord.xy + u_jitter - u_resolution.xy) / u_resolution.y;
         vec3 rd = normalize(uv.x * u_camRight + uv.y * u_camUp + 1.0 * u_camForward); 
         
         vec3 col = getSceneColor(u_ro, rd);
         col *= u_brightness; 
 
-        // Blend linearly with previous frame
+        // TAA Blending
         vec2 screenUV = gl_FragCoord.xy / u_resolution.xy;
         vec3 prevCol = texture(u_prevFrame, screenUV).rgb;
         vec3 finalCol = mix(prevCol, col, 1.0 / (u_frame + 1.0));
@@ -248,7 +243,7 @@ const fsAccum = `#version 300 es
     }
 `;
 
-// --- 2. The Screen Shader (Draws to Canvas & Applies Gamma) ---
+// --- 2. The Screen Shader ---
 const vsScreen = `#version 300 es
     in vec2 a_position;
     out vec2 v_uv;
@@ -265,7 +260,7 @@ const fsScreen = `#version 300 es
     uniform sampler2D u_texture;
     void main() {
         vec3 col = texture(u_texture, v_uv).rgb;
-        col = pow(col, vec3(1.0/2.2)); // Gamma correction applied only at the very end
+        col = pow(col, vec3(1.0/2.2)); // Gamma correction
         outColor = vec4(col, 1.0);
     }
 `;
@@ -285,10 +280,7 @@ const accumProgram = compileProgram(vsAccum, fsAccum);
 const screenProgram = compileProgram(vsScreen, fsScreen);
 
 // --- 3. WebGL Framebuffer Setup ---
-// Enable Float Textures for high-precision blending
-if (!gl.getExtension('EXT_color_buffer_float')) {
-    console.warn("Float textures not supported! Blending may have banding.");
-}
+gl.getExtension('EXT_color_buffer_float'); 
 
 const positionBuffer = gl.createBuffer();
 gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
@@ -297,11 +289,10 @@ gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
     -1.0,  1.0,   1.0, -1.0,   1.0,  1.0
 ]), gl.STATIC_DRAW);
 
-// Helper to create a Float Texture
 function createAccumTexture() {
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, canvas.width, canvas.height, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, canvas.width, canvas.height, 0, gl.RGBA, gl.HALF_FLOAT, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     return tex;
@@ -318,7 +309,7 @@ let fboB = gl.createFramebuffer();
 gl.bindFramebuffer(gl.FRAMEBUFFER, fboB);
 gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texB, 0);
 
-// Fetch Accumulator Uniforms
+// Fetch Uniforms
 const locRes = gl.getUniformLocation(accumProgram, 'u_resolution');
 const locRo = gl.getUniformLocation(accumProgram, 'u_ro');
 const locFwd = gl.getUniformLocation(accumProgram, 'u_camForward');
@@ -327,13 +318,185 @@ const locUp = gl.getUniformLocation(accumProgram, 'u_camUp');
 const locPrev = gl.getUniformLocation(accumProgram, 'u_prevFrame');
 const locFrame = gl.getUniformLocation(accumProgram, 'u_frame');
 const locJitter = gl.getUniformLocation(accumProgram, 'u_jitter');
-
 const locScale = gl.getUniformLocation(accumProgram, 'u_scale');
 const locIter = gl.getUniformLocation(accumProgram, 'u_iterations');
 const locBase = gl.getUniformLocation(accumProgram, 'u_baseColor');
 const locBg = gl.getUniformLocation(accumProgram, 'u_bgColor');
 const locBright = gl.getUniformLocation(accumProgram, 'u_brightness');
 const locLight = gl.getUniformLocation(accumProgram, 'u_lightPos');
+
+
+// --- Quaternion Math Helper ---
+const Quat = {
+    multiply: (a, b) => ({
+        w: a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z,
+        x: a.w*b.x + a.x*b.w + a.y*b.z - a.z*b.y,
+        y: a.w*b.y - a.x*b.z + a.y*b.w + a.z*b.x,
+        z: a.w*b.z + a.x*b.y - a.y*b.x + a.z*b.w
+    }),
+    fromAxisAngle: (axis, angle) => {
+        const half = angle / 2;
+        const s = Math.sin(half);
+        return { w: Math.cos(half), x: axis[0]*s, y: axis[1]*s, z: axis[2]*s };
+    },
+    rotateVec3: (q, v) => {
+        const ix = q.w * v[0] + q.y * v[2] - q.z * v[1];
+        const iy = q.w * v[1] + q.z * v[0] - q.x * v[2];
+        const iz = q.w * v[2] + q.x * v[1] - q.y * v[0];
+        const iw = -q.x * v[0] - q.y * v[1] - q.z * v[2];
+        return {
+            x: ix * q.w + iw * -q.x + iy * -q.z - iz * -q.y,
+            y: iy * q.w + iw * -q.y + iz * -q.x - ix * -q.z,
+            z: iz * q.w + iw * -q.z + ix * -q.y - iy * -q.x
+        };
+    },
+    normalize: (q) => {
+        const len = Math.hypot(q.w, q.x, q.y, q.z);
+        if (len === 0) return {w:1, x:0, y:0, z:0};
+        return { w: q.w/len, x: q.x/len, y: q.y/len, z: q.z/len };
+    },
+    slerp: (a, b, t) => {
+        let cosHalfTheta = a.w*b.w + a.x*b.x + a.y*b.y + a.z*b.z;
+        let qm = b;
+        if (cosHalfTheta < 0) {
+            qm = { w: -b.w, x: -b.x, y: -b.y, z: -b.z };
+            cosHalfTheta = -cosHalfTheta;
+        }
+        if (cosHalfTheta >= 1.0) return a;
+        const halfTheta = Math.acos(cosHalfTheta);
+        const sinHalfTheta = Math.sqrt(1.0 - cosHalfTheta*cosHalfTheta);
+        if (Math.abs(sinHalfTheta) < 0.001) {
+            return Quat.normalize({
+                w: a.w*0.5 + qm.w*0.5, x: a.x*0.5 + qm.x*0.5,
+                y: a.y*0.5 + qm.y*0.5, z: a.z*0.5 + qm.z*0.5
+            });
+        }
+        const ratioA = Math.sin((1 - t) * halfTheta) / sinHalfTheta;
+        const ratioB = Math.sin(t * halfTheta) / sinHalfTheta;
+        return {
+            w: a.w*ratioA + qm.w*ratioB, x: a.x*ratioA + qm.x*ratioB,
+            y: a.y*ratioA + qm.y*ratioB, z: a.z*ratioA + qm.z*ratioB
+        };
+    }
+};
+
+// --- Mouse Events ---
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+canvas.addEventListener('mousedown', (e) => {
+    if (e.button === 0) {
+        let borderSize = Math.min(canvas.width, canvas.height) * 0.18;
+        let isEdgeX = e.offsetX < borderSize || e.offsetX > canvas.width - borderSize;
+        let isEdgeY = e.offsetY < borderSize || e.offsetY > canvas.height - borderSize;
+        if (isEdgeX || isEdgeY) {
+            isRolling = true;
+            lastRollAngle = Math.atan2(e.offsetY - canvas.height / 2, e.offsetX - canvas.width / 2);
+        } else {
+            isLooking = true;
+        }
+    }
+    if (e.button === 2) isPanning = true; 
+    lastInput = { x: e.offsetX, y: e.offsetY };
+});
+
+canvas.addEventListener('mousemove', (e) => {
+    let deltaX = e.offsetX - lastInput.x;
+    let deltaY = e.offsetY - lastInput.y;
+
+    if (isRolling) {
+        let newAngle = Math.atan2(e.offsetY - canvas.height / 2, e.offsetX - canvas.width / 2);
+        let dAngle = newAngle - lastRollAngle;
+        if (dAngle > Math.PI) dAngle -= Math.PI * 2;
+        if (dAngle < -Math.PI) dAngle += Math.PI * 2;
+        let qRoll = Quat.fromAxisAngle([0, 0, 1], dAngle);
+        tRot = Quat.normalize(Quat.multiply(tRot, qRoll)); 
+        lastRollAngle = newAngle;
+    } 
+    else if (isLooking) {
+        let qYaw = Quat.fromAxisAngle([0, 1, 0], -deltaX * 0.005);
+        let qPitch = Quat.fromAxisAngle([1, 0, 0], -deltaY * 0.005);
+        let qTurn = Quat.multiply(qYaw, qPitch);
+        tRot = Quat.normalize(Quat.multiply(tRot, qTurn));
+    }
+
+    if (isPanning) handlePan(deltaX, deltaY);
+    lastInput = { x: e.offsetX, y: e.offsetY };
+});
+
+window.addEventListener('mouseup', () => { isLooking = false; isPanning = false; isRolling = false; }); 
+canvas.addEventListener('mouseleave', () => { isLooking = false; isPanning = false; isRolling = false; });
+
+canvas.addEventListener('wheel', (e) => {
+    e.preventDefault(); 
+    handleForwardMovement(-e.deltaY * 0.005); 
+}, { passive: false });
+
+// --- Touch Events ---
+canvas.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    if (e.touches.length === 1) {
+        let tx = e.touches[0].clientX;
+        let ty = e.touches[0].clientY;
+        let borderSize = Math.min(canvas.width, canvas.height) * 0.18;
+        let isEdgeX = tx < borderSize || tx > canvas.width - borderSize;
+        let isEdgeY = ty < borderSize || ty > canvas.height - borderSize;
+        
+        if (isEdgeX || isEdgeY) {
+            isRolling = true;
+            lastRollAngle = Math.atan2(ty - canvas.height / 2, tx - canvas.width / 2);
+        } else {
+            isLooking = true;
+        }
+        lastInput = { x: tx, y: ty };
+    } else if (e.touches.length === 2) {
+        isLooking = false; isRolling = false; isPanning = true;
+        lastTouchDistance = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+        lastTouchCenter = { x: (e.touches[0].clientX + e.touches[1].clientX) / 2, y: (e.touches[0].clientY + e.touches[1].clientY) / 2 };
+    }
+}, { passive: false });
+
+canvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    if (e.touches.length === 1) {
+        if (isRolling) {
+            let newAngle = Math.atan2(e.touches[0].clientY - canvas.height / 2, e.touches[0].clientX - canvas.width / 2);
+            let dAngle = newAngle - lastRollAngle;
+            if (dAngle > Math.PI) dAngle -= Math.PI * 2;
+            if (dAngle < -Math.PI) dAngle += Math.PI * 2;
+            let qRoll = Quat.fromAxisAngle([0, 0, 1], dAngle);
+            tRot = Quat.normalize(Quat.multiply(tRot, qRoll));
+            lastRollAngle = newAngle;
+        } 
+        else if (isLooking) {
+            let deltaX = e.touches[0].clientX - lastInput.x;
+            let deltaY = e.touches[0].clientY - lastInput.y;
+            let qYaw = Quat.fromAxisAngle([0, 1, 0], deltaX * 0.005); 
+            let qPitch = Quat.fromAxisAngle([1, 0, 0], deltaY * 0.005); 
+            let qTurn = Quat.multiply(qYaw, qPitch);
+            tRot = Quat.normalize(Quat.multiply(tRot, qTurn));
+        }
+        lastInput = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    } 
+    else if (e.touches.length === 2 && isPanning) {
+        const currentDistance = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+        const currentCenter = { x: (e.touches[0].clientX + e.touches[1].clientX) / 2, y: (e.touches[0].clientY + e.touches[1].clientY) / 2 };
+        handleForwardMovement((currentDistance - lastTouchDistance) * 0.01); 
+        handlePan(currentCenter.x - lastTouchCenter.x, currentCenter.y - lastTouchCenter.y); 
+        lastTouchDistance = currentDistance;
+        lastTouchCenter = currentCenter;
+    }
+}, { passive: false });
+
+canvas.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    if (e.touches.length < 2) isPanning = false;
+    if (e.touches.length === 0) { isLooking = false; isRolling = false; }
+    if (e.touches.length === 1) {
+        lastInput = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        isLooking = true; 
+    }
+});
+canvas.addEventListener('touchcancel', () => { isLooking = false; isPanning = false; isRolling = false; });
 
 // --- Movement Calculations ---
 function handlePan(deltaX, deltaY) {
@@ -355,13 +518,13 @@ let texWidth = canvas.width;
 let texHeight = canvas.height;
 
 function render(time) {
-    // 1. Detect if the screen resized to rebuild framebuffers
+    // 1. Detect Resize -> Rebuild FBOs
     if (canvas.width !== texWidth || canvas.height !== texHeight) {
         texWidth = canvas.width; texHeight = canvas.height;
         gl.bindTexture(gl.TEXTURE_2D, texA);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, texWidth, texHeight, 0, gl.RGBA, gl.FLOAT, null);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, texWidth, texHeight, 0, gl.RGBA, gl.HALF_FLOAT, null);
         gl.bindTexture(gl.TEXTURE_2D, texB);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, texWidth, texHeight, 0, gl.RGBA, gl.FLOAT, null);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, texWidth, texHeight, 0, gl.RGBA, gl.HALF_FLOAT, null);
         isDirty = true;
     }
 
@@ -388,10 +551,10 @@ function render(time) {
     gl.useProgram(accumProgram);
 
     let posLoc = gl.getAttribLocation(accumProgram, 'a_position');
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
     gl.enableVertexAttribArray(posLoc);
     gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
 
-    // Set Data
     gl.uniform2f(locRes, canvas.width, canvas.height);
     gl.uniform3f(locRo, cPos.x, cPos.y, cPos.z);
     gl.uniform3f(locFwd, fwd.x, fwd.y, fwd.z);
@@ -407,19 +570,18 @@ function render(time) {
 
     gl.uniform1f(locFrame, frameCount);
     
-    // Sub-pixel jitter (0 on first frame, random offset afterwards)
+    // Jitter camera for anti-aliasing
     let jx = frameCount === 0 ? 0 : (Math.random() - 0.5);
     let jy = frameCount === 0 ? 0 : (Math.random() - 0.5);
     gl.uniform2f(locJitter, jx, jy);
 
-    // Bind Texture B (history) to read from
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texB);
     gl.uniform1i(locPrev, 0);
 
     gl.drawArrays(gl.TRIANGLES, 0, 6);
 
-    // --- PASS 2: Draw FBO to Screen ---
+    // --- PASS 2: Draw to Screen ---
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.useProgram(screenProgram);
     
@@ -427,14 +589,13 @@ function render(time) {
     gl.enableVertexAttribArray(screenPosLoc);
     gl.vertexAttribPointer(screenPosLoc, 2, gl.FLOAT, false, 0, 0);
 
-    // Bind Texture A (the newly rendered frame) to draw
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texA);
     gl.uniform1i(gl.getUniformLocation(screenProgram, 'u_texture'), 0);
 
     gl.drawArrays(gl.TRIANGLES, 0, 6);
 
-    // --- 4. Swap Ping-Pong Buffers ---
+    // 4. Swap Ping-Pong Buffers
     let tempTex = texA; texA = texB; texB = tempTex;
     let tempFbo = fboA; fboA = fboB; fboB = tempFbo;
 
