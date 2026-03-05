@@ -129,6 +129,8 @@ function createExportFBOs(w, h) {
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
         return tex;
     };
 
@@ -140,6 +142,11 @@ function createExportFBOs(w, h) {
     const tFinal = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tFinal);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
     const fFinal = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, fFinal); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tFinal, 0);
 
@@ -182,7 +189,6 @@ async function exportHighResImage() {
                 const curW = Math.min(tileSize, totalW - x * tileSize);
                 const curH = Math.min(tileSize, totalH - y * tileSize);
 
-                // EXPLICIT WIPE: Prevents NaN corruption and bleed between tiles
                 gl.bindFramebuffer(gl.FRAMEBUFFER, exp.fA); gl.clearColor(0,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT);
                 gl.bindFramebuffer(gl.FRAMEBUFFER, exp.fB); gl.clearColor(0,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT);
                 gl.bindFramebuffer(gl.FRAMEBUFFER, exp.fFinal); gl.clearColor(0,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT);
@@ -191,12 +197,12 @@ async function exportHighResImage() {
                 let writeFbo = exp.fA;
 
                 for (let s = 0; s < params.exportSamples; s++) {
-                    drawExportFrame(totalW, totalH, x * tileSize, y * tileSize, s, writeFbo, readTex);
+                    drawExportFrame(totalW, totalH, x * tileSize, y * tileSize, s, tileSize, tileSize, writeFbo, readTex);
 
                     let tempT = readTex; readTex = writeFbo === exp.fA ? exp.tA : exp.tB;
                     writeFbo = writeFbo === exp.fA ? exp.fB : exp.fA;
 
-                    if (s % 10 === 0) await new Promise(r => setTimeout(r, 5));
+                    if (s % 2 === 0) await new Promise(r => setTimeout(r, 1));
                 }
 
                 let finalFloatTex = writeFbo === exp.fA ? exp.tB : exp.tA;
@@ -216,8 +222,6 @@ async function exportHighResImage() {
                 gl.readPixels(0, 0, curW, curH, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
 
                 const imageData = ctx.createImageData(curW, curH);
-
-                // FORCED ALPHA: Manually map pixels to Canvas and lock Alpha to 255
                 for (let i = 0; i < curH; i++) {
                     for (let j = 0; j < curW; j++) {
                         const srcIdx = ((curH - 1 - i) * curW + j) * 4;
@@ -445,7 +449,6 @@ const fsScreen = `#version 300 es
         vec2 uv = gl_FragCoord.xy / vec2(textureSize(u_texture, 0));
         vec3 col = texture(u_texture, uv).rgb;
         
-        // SAFETY CLAMP: Prevent NaNs from slipping into the pow function
         col = max(col, 0.0);
         col = pow(col, vec3(1.0/2.2)); 
         outColor = vec4(col, 1.0);
@@ -490,6 +493,8 @@ function rebuildMainFBOs(w, h) {
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
         return tex;
     };
     texA = createTex(); texB = createTex();
@@ -621,7 +626,9 @@ function handleForwardMovement(amount) {
 }
 
 // --- Dedicated Tile Renderer ---
-function drawExportFrame(targetWidth, targetHeight, offsetX, offsetY, frameIndex, fboWrite, texRead) {
+const hash = (n) => { let f = Math.sin(n) * 43758.5453; return f - Math.floor(f); };
+
+function drawExportFrame(targetWidth, targetHeight, offsetX, offsetY, frameIndex, viewW, viewH, fboWrite, texRead) {
     let fwd = Quat.rotateVec3(cRot, [0, 0, -1]);
     let right = Quat.rotateVec3(cRot, [1, 0, 0]);
     let up = Quat.rotateVec3(cRot, [0, 1, 0]);
@@ -651,9 +658,8 @@ function drawExportFrame(targetWidth, targetHeight, offsetX, offsetY, frameIndex
 
     gl.uniform1f(locFrame, frameIndex);
 
-    // DETERMINISTIC JITTER: Identical blur boundaries across all tiles
-    let jx = frameIndex === 0 ? 0 : ((Math.sin(frameIndex * 12.9898) * 43758.5453) % 1.0) - 0.5;
-    let jy = frameIndex === 0 ? 0 : ((Math.sin(frameIndex * 78.2330) * 43758.5453) % 1.0) - 0.5;
+    let jx = frameIndex === 0 ? 0 : hash(frameIndex * 12.9898) - 0.5;
+    let jy = frameIndex === 0 ? 0 : hash(frameIndex * 78.2330) - 0.5;
     gl.uniform2f(locJitter, jx, jy);
 
     gl.activeTexture(gl.TEXTURE0);
@@ -687,9 +693,8 @@ function render(time) {
 
     gl.viewport(0, 0, canvas.width, canvas.height);
 
-    // Viewport preview jitter
-    let jx = frameCount === 0 ? 0 : ((Math.sin(frameCount * 12.9898) * 43758.5453) % 1.0) - 0.5;
-    let jy = frameCount === 0 ? 0 : ((Math.sin(frameCount * 78.2330) * 43758.5453) % 1.0) - 0.5;
+    let jx = frameCount === 0 ? 0 : hash(frameCount * 12.9898) - 0.5;
+    let jy = frameCount === 0 ? 0 : hash(frameCount * 78.2330) - 0.5;
 
     let fwd = Quat.rotateVec3(cRot, [0, 0, -1]);
     let right = Quat.rotateVec3(cRot, [1, 0, 0]);
