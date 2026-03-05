@@ -124,7 +124,7 @@ fileInput.onchange = e => {
 
 // Isolated FBO creation strictly for tiled export
 function createExportFBOs(w, h) {
-    const createTex = () => {
+    const createFloatTex = () => {
         const tex = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, tex);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
@@ -132,34 +132,43 @@ function createExportFBOs(w, h) {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
         return tex;
     };
-    const tA = createTex(), tB = createTex();
+
+    // Half-float buffers for accumulation
+    const tA = createFloatTex(), tB = createFloatTex();
     const fA = gl.createFramebuffer(), fB = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, fA); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tA, 0);
     gl.bindFramebuffer(gl.FRAMEBUFFER, fB); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tB, 0);
-    return { tA, tB, fA, fB };
+
+    // Standard 8-bit buffer for final pixel extraction
+    const tFinal = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tFinal);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    const fFinal = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fFinal); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tFinal, 0);
+
+    return { tA, tB, fA, fB, tFinal, fFinal };
 }
 
 async function exportHighResImage() {
     if (isExporting) return;
     isExporting = true;
-    params.showCrop = false; 
+    params.showCrop = false;
     gui.controllersRecursive().forEach(c => c.updateDisplay());
     updateCropGuide();
-    
+
     const uid = generateUID();
     exportOverlay.style.display = 'flex';
     exportStatus.innerText = 'Initializing Memory...';
     exportBarFill.style.width = '0%';
-    
-    // Yield to let the UI strictly paint the overlay before we lock the GPU
+
     await new Promise(r => setTimeout(r, 100));
 
     const totalW = params.exportWidth;
     const totalH = params.exportHeight;
-    const tileSize = 1024; 
+    const tileSize = 1024;
     const cols = Math.ceil(totalW / tileSize);
     const rows = Math.ceil(totalH / tileSize);
-    
+
     let exp = null;
 
     try {
@@ -168,7 +177,6 @@ async function exportHighResImage() {
         finalCanvas.height = totalH;
         const ctx = finalCanvas.getContext('2d');
 
-        // Note: We DO NOT change canvas.width or canvas.height here. We only change the viewport.
         gl.viewport(0, 0, tileSize, tileSize);
         exp = createExportFBOs(tileSize, tileSize);
 
@@ -176,51 +184,58 @@ async function exportHighResImage() {
             for (let x = 0; x < cols; x++) {
                 const curW = Math.min(tileSize, totalW - x * tileSize);
                 const curH = Math.min(tileSize, totalH - y * tileSize);
-                
+
                 let readTex = exp.tB;
                 let writeFbo = exp.fA;
 
-                // Render TAA Passes for this specific tile
+                // 1. Accumulate TAA Samples
                 for (let s = 0; s < params.exportSamples; s++) {
                     drawExportFrame(totalW, totalH, x * tileSize, y * tileSize, s, tileSize, tileSize, writeFbo, readTex);
-                    
-                    // Swap logic
+
                     let tempT = readTex; readTex = writeFbo === exp.fA ? exp.tA : exp.tB;
                     writeFbo = writeFbo === exp.fA ? exp.fB : exp.fA;
 
-                    // Yield frequently to prevent the browser watchdog from killing the context
-                    if (s % 10 === 0) await new Promise(r => setTimeout(r, 5)); 
+                    if (s % 10 === 0) await new Promise(r => setTimeout(r, 5));
                 }
 
-                // The final resolved frame is in the FBO opposite of the current writeFbo
-                let finalFbo = writeFbo === exp.fA ? exp.fB : exp.fA;
-                gl.bindFramebuffer(gl.FRAMEBUFFER, finalFbo);
-                
+                // 2. Pass the accumulated float texture through the screen shader for Gamma Correction
+                let finalFloatTex = writeFbo === exp.fA ? exp.tB : exp.tA;
+
+                gl.bindFramebuffer(gl.FRAMEBUFFER, exp.fFinal);
+                gl.useProgram(screenProgram);
+                let screenPosLoc = gl.getAttribLocation(screenProgram, 'a_position');
+                gl.enableVertexAttribArray(screenPosLoc);
+                gl.vertexAttribPointer(screenPosLoc, 2, gl.FLOAT, false, 0, 0);
+
+                gl.activeTexture(gl.TEXTURE0);
+                gl.bindTexture(gl.TEXTURE_2D, finalFloatTex);
+                gl.uniform1i(gl.getUniformLocation(screenProgram, 'u_texture'), 0);
+                gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+                // 3. Extract perfectly formatted 8-bit pixels
                 const pixels = new Uint8Array(curW * curH * 4);
                 gl.readPixels(0, 0, curW, curH, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
 
-                // Flip Y-axis (WebGL reads bottom-up, Canvas writes top-down)
+                // Flip Y-axis mapping to canvas
                 const imageData = ctx.createImageData(curW, curH);
                 for (let i = 0; i < curH; i++) {
                     const srcOffset = (curH - 1 - i) * curW * 4;
                     const dstOffset = i * curW * 4;
                     imageData.data.set(pixels.subarray(srcOffset, srcOffset + curW * 4), dstOffset);
                 }
-                
+
                 ctx.putImageData(imageData, x * tileSize, totalH - (y * tileSize) - curH);
-                
-                // Update UI Progress
+
                 let progress = ((y * cols + x + 1) / (cols * rows)) * 100;
                 exportStatus.innerText = `Processing Tile ${y * cols + x + 1} of ${cols * rows}`;
                 exportBarFill.style.width = `${progress}%`;
-                
-                // Crucial yield so the progress bar visually updates
-                await new Promise(r => setTimeout(r, 10)); 
+
+                await new Promise(r => setTimeout(r, 10));
             }
         }
 
         exportStatus.innerText = 'Encoding PNG (This may take a minute)...';
-        await new Promise(r => setTimeout(r, 100)); 
+        await new Promise(r => setTimeout(r, 100));
 
         finalCanvas.toBlob((blob) => {
             if(!blob) {
@@ -238,16 +253,14 @@ async function exportHighResImage() {
     } catch (e) {
         alert("Export failed: " + e.message);
     } finally {
-        // Cleanup isolated FBOs to prevent memory leaks
         if(exp) {
-            gl.deleteTexture(exp.tA); gl.deleteTexture(exp.tB);
-            gl.deleteFramebuffer(exp.fA); gl.deleteFramebuffer(exp.fB);
+            gl.deleteTexture(exp.tA); gl.deleteTexture(exp.tB); gl.deleteTexture(exp.tFinal);
+            gl.deleteFramebuffer(exp.fA); gl.deleteFramebuffer(exp.fB); gl.deleteFramebuffer(exp.fFinal);
         }
         isExporting = false;
         exportOverlay.style.display = 'none';
-        
-        // Restore main viewport
-        gl.viewport(0, 0, canvas.width, canvas.height); 
+
+        gl.viewport(0, 0, canvas.width, canvas.height);
         isDirty = true;
     }
 }
