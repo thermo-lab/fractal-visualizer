@@ -55,6 +55,7 @@ const params = {
     lightX: 2.0,
     lightY: 3.0,
     lightZ: -2.0,
+    previewSamples: 60,
     showCrop: false,
     exportWidth: 7200,
     exportHeight: 10800,
@@ -297,6 +298,7 @@ visualFolder.add(params, 'brightness', 0.1, 5.0, 0.1).name('Brightness');
 visualFolder.add(params, 'lightX', -10.0, 10.0).name('Light X');
 visualFolder.add(params, 'lightY', -10.0, 10.0).name('Light Y');
 visualFolder.add(params, 'lightZ', -10.0, 10.0).name('Light Z');
+visualFolder.add(params, 'previewSamples', 1, 200, 1).name('Preview Quality'); // NEW
 
 const exportFolder = gui.addFolder('High-Res Export');
 exportFolder.add(params, 'showCrop').name('Show Crop Guide').onChange(updateCropGuide);
@@ -672,6 +674,9 @@ function drawExportFrame(targetWidth, targetHeight, offsetX, offsetY, frameIndex
 // --- Main Render Loop (Viewport Preview) ---
 let texWidth = canvas.width, texHeight = canvas.height;
 
+// --- Main Render Loop (Viewport Preview) ---
+let texWidth = canvas.width, texHeight = canvas.height;
+
 function render(time) {
     if (isExporting) {
         requestAnimationFrame(render);
@@ -691,47 +696,57 @@ function render(time) {
         frameCount = 0; isDirty = false;
     }
 
-    gl.viewport(0, 0, canvas.width, canvas.height);
+    // ONLY run the heavy raymarching shader if we haven't hit our quality cap yet
+    if (frameCount < params.previewSamples) {
+        gl.viewport(0, 0, canvas.width, canvas.height);
 
-    let jx = frameCount === 0 ? 0 : hash(frameCount * 12.9898) - 0.5;
-    let jy = frameCount === 0 ? 0 : hash(frameCount * 78.2330) - 0.5;
+        let jx = frameCount === 0 ? 0 : hash(frameCount * 12.9898) - 0.5;
+        let jy = frameCount === 0 ? 0 : hash(frameCount * 78.2330) - 0.5;
 
-    let fwd = Quat.rotateVec3(cRot, [0, 0, -1]);
-    let right = Quat.rotateVec3(cRot, [1, 0, 0]);
-    let up = Quat.rotateVec3(cRot, [0, 1, 0]);
+        let fwd = Quat.rotateVec3(cRot, [0, 0, -1]);
+        let right = Quat.rotateVec3(cRot, [1, 0, 0]);
+        let up = Quat.rotateVec3(cRot, [0, 1, 0]);
 
-    gl.bindFramebuffer(gl.FRAMEBUFFER, fboA);
-    gl.useProgram(accumProgram);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fboA);
+        gl.useProgram(accumProgram);
 
-    let posLoc = gl.getAttribLocation(accumProgram, 'a_position');
-    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-    gl.enableVertexAttribArray(posLoc);
-    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+        let posLoc = gl.getAttribLocation(accumProgram, 'a_position');
+        gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+        gl.enableVertexAttribArray(posLoc);
+        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
 
-    gl.uniform2f(locTargetRes, canvas.width, canvas.height);
-    gl.uniform2f(locTileOffset, 0, 0);
+        gl.uniform2f(locTargetRes, canvas.width, canvas.height);
+        gl.uniform2f(locTileOffset, 0, 0);
 
-    gl.uniform3f(locRo, cPos.x, cPos.y, cPos.z);
-    gl.uniform3f(locFwd, fwd.x, fwd.y, fwd.z);
-    gl.uniform3f(locRight, right.x, right.y, right.z);
-    gl.uniform3f(locUp, up.x, up.y, up.z);
+        gl.uniform3f(locRo, cPos.x, cPos.y, cPos.z);
+        gl.uniform3f(locFwd, fwd.x, fwd.y, fwd.z);
+        gl.uniform3f(locRight, right.x, right.y, right.z);
+        gl.uniform3f(locUp, up.x, up.y, up.z);
 
-    gl.uniform1f(locScale, params.scale);
-    gl.uniform1i(locIter, params.iterations);
-    gl.uniform3f(locBase, params.baseColor[0], params.baseColor[1], params.baseColor[2]);
-    gl.uniform3f(locBg, params.bgColor[0], params.bgColor[1], params.bgColor[2]);
-    gl.uniform1f(locBright, params.brightness);
-    gl.uniform3f(locLight, params.lightX, params.lightY, params.lightZ);
+        gl.uniform1f(locScale, params.scale);
+        gl.uniform1i(locIter, params.iterations);
+        gl.uniform3f(locBase, params.baseColor[0], params.baseColor[1], params.baseColor[2]);
+        gl.uniform3f(locBg, params.bgColor[0], params.bgColor[1], params.bgColor[2]);
+        gl.uniform1f(locBright, params.brightness);
+        gl.uniform3f(locLight, params.lightX, params.lightY, params.lightZ);
 
-    gl.uniform1f(locFrame, frameCount);
-    gl.uniform2f(locJitter, jx, jy);
+        gl.uniform1f(locFrame, frameCount);
+        gl.uniform2f(locJitter, jx, jy);
 
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, texB);
-    gl.uniform1i(locPrev, 0);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, texB);
+        gl.uniform1i(locPrev, 0);
 
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
 
+        // Swap ping-pong buffers
+        let tempTex = texA; texA = texB; texB = tempTex;
+        let tempFbo = fboA; fboA = fboB; fboB = tempFbo;
+
+        frameCount++;
+    }
+
+    // ALWAYS draw the result to the screen (this takes almost zero GPU effort)
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.useProgram(screenProgram);
     let screenPosLoc = gl.getAttribLocation(screenProgram, 'a_position');
@@ -739,14 +754,11 @@ function render(time) {
     gl.vertexAttribPointer(screenPosLoc, 2, gl.FLOAT, false, 0, 0);
 
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, texA);
+    // Draw texB, because the swap above leaves texB holding the most up-to-date image
+    gl.bindTexture(gl.TEXTURE_2D, texB);
     gl.uniform1i(gl.getUniformLocation(screenProgram, 'u_texture'), 0);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
 
-    let tempTex = texA; texA = texB; texB = tempTex;
-    let tempFbo = fboA; fboA = fboB; fboB = tempFbo;
-
-    frameCount++;
     requestAnimationFrame(render);
 }
 
