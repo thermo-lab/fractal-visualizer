@@ -116,7 +116,22 @@ fileInput.onchange = e => {
     reader.onload = readerEvent => {
         try {
             const state = JSON.parse(readerEvent.target.result);
-            if (state.params) { Object.assign(params, state.params); gui.controllersRecursive().forEach(c => c.updateDisplay()); updateCropGuide(); }
+
+            if (state.params) {
+                // DEEP COPY: Surgically update values to preserve lil-gui's array references
+                for (let key in state.params) {
+                    if (Array.isArray(params[key]) && Array.isArray(state.params[key])) {
+                        for (let i = 0; i < params[key].length; i++) {
+                            params[key][i] = state.params[key][i];
+                        }
+                    } else if (params[key] !== undefined) {
+                        params[key] = state.params[key];
+                    }
+                }
+                gui.controllersRecursive().forEach(c => c.updateDisplay());
+                updateCropGuide();
+            }
+
             if (state.camera) {
                 tPos = state.camera.pos; cPos = { x: tPos.x, y: tPos.y, z: tPos.z };
                 tRot = state.camera.rot; cRot = { w: tRot.w, x: tRot.x, y: tRot.y, z: tRot.z };
