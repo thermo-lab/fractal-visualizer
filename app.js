@@ -44,18 +44,16 @@ exportOverlay.appendChild(exportStatus);
 exportOverlay.appendChild(exportBarBg);
 document.body.appendChild(exportOverlay);
 
-
 // --- UI Parameters ---
 const params = {
     scale: 2.0,
     iterations: 12,
 
-    // NEW: Algorithmic Palette Vectors
-    palA: [0.5, 0.5, 0.5],     // Offset
-    palB: [0.5, 0.5, 0.5],     // Amplitude
-    palC: [1.0, 1.0, 1.0],     // Frequency
-    palD: [0.00, 0.33, 0.67],  // Phase (Default creates a rainbow/blue-orange vibe)
-    colorBlend: 1.5,           // Wrap speed
+    palA: [0.5, 0.5, 0.5],
+    palB: [0.5, 0.5, 0.5],
+    palC: [1.0, 1.0, 1.0],
+    palD: [0.00, 0.33, 0.67],
+    colorBlend: 1.5,
 
     bgColor: [0.02, 0.02, 0.03],
     brightness: 1.2,
@@ -205,6 +203,7 @@ async function exportHighResImage() {
                 let writeFbo = exp.fA;
 
                 for (let s = 0; s < params.exportSamples; s++) {
+                    // FIXED: Removed the leftover tileSize parameters!
                     drawExportFrame(totalW, totalH, x * tileSize, y * tileSize, s, writeFbo, readTex);
 
                     let tempT = readTex; readTex = writeFbo === exp.fA ? exp.tA : exp.tB;
@@ -298,33 +297,26 @@ const mathFolder = gui.addFolder('Mathematics');
 mathFolder.add(params, 'scale', -3.0, 3.0).name('Box Scale');
 mathFolder.add(params, 'iterations', 1, 30, 1).name('Iterations');
 
-// NEW: Dedicated Palette Sub-Folders
 const palFolder = gui.addFolder('Algorithmic Palette');
 palFolder.addColor(params, 'palA').name('Color Offset');
 palFolder.addColor(params, 'palB').name('Color Contrast');
-
 const freqFolder = palFolder.addFolder('Frequency (RGB)');
 freqFolder.add(params.palC, 0, 0.0, 5.0, 0.01).name('Red Freq');
 freqFolder.add(params.palC, 1, 0.0, 5.0, 0.01).name('Green Freq');
 freqFolder.add(params.palC, 2, 0.0, 5.0, 0.01).name('Blue Freq');
-
 const phaseFolder = palFolder.addFolder('Phase Shift (RGB)');
 phaseFolder.add(params.palD, 0, 0.0, 1.0, 0.01).name('Red Phase');
 phaseFolder.add(params.palD, 1, 0.0, 1.0, 0.01).name('Green Phase');
 phaseFolder.add(params.palD, 2, 0.0, 1.0, 0.01).name('Blue Phase');
-
 palFolder.add(params, 'colorBlend', 0.1, 10.0, 0.1).name('Wrap Tightness');
 
 const visualFolder = gui.addFolder('Lighting & Environment');
-// Removed the old 'baseColor' since the palette overrides it now
 visualFolder.addColor(params, 'bgColor').name('Background / Fog');
 visualFolder.add(params, 'brightness', 0.1, 5.0, 0.1).name('Brightness');
 visualFolder.add(params, 'lightX', -10.0, 10.0).name('Light X');
 visualFolder.add(params, 'lightY', -10.0, 10.0).name('Light Y');
 visualFolder.add(params, 'lightZ', -10.0, 10.0).name('Light Z');
 visualFolder.add(params, 'previewSamples', 1, 200, 1).name('Preview Quality');
-
-// ... (Keep the High-Res Export and Import/Export State folders below this)
 
 const exportFolder = gui.addFolder('High-Res Export');
 exportFolder.add(params, 'showCrop').name('Show Crop Guide').onChange(updateCropGuide);
@@ -360,7 +352,6 @@ const fsAccum = `#version 300 es
     uniform float u_scale;
     uniform int u_iterations;
     
-    // NEW: Palette Uniforms
     uniform vec3 u_palA;
     uniform vec3 u_palB;
     uniform vec3 u_palC;
@@ -375,22 +366,16 @@ const fsAccum = `#version 300 es
     uniform float u_frame;
     uniform vec2 u_jitter;
 
-    // NEW: Map function using a Structural/Kinetic Accumulation Trap
     vec2 map(vec3 p) {
         vec3 offset = p;
         float dr = 1.0;
-        
-        // Start the trap at 0 instead of a massive number
         float trap = 0.0; 
 
         for (int i = 0; i < 30; i++) {
             if (i >= u_iterations) break; 
-            
-            // Remember where the point was before we folded it
             vec3 prevP = p; 
             
             p = clamp(p, -1.0, 1.0) * 2.0 - p;
-            
             float r2 = dot(p, p);
             if (r2 < 0.25) { p *= 4.0; dr *= 4.0; } 
             else if (r2 < 1.0) { p /= r2; dr /= r2; }
@@ -398,20 +383,17 @@ const fsAccum = `#version 300 es
             p = p * u_scale + offset;
             dr = dr * abs(u_scale) + 1.0;
             
-            // STRUCTURAL TRAP: Measure how violently the point was deformed
-            trap += length(p - prevP); 
+            // FIXED: Clamped to prevent math from generating NaN black pixels
+            trap += min(length(p - prevP), 10.0); 
         }
         
-        // Average the accumulated chaos so it plays nicely with our color wrap slider
         trap = trap / float(u_iterations);
-        
         return vec2(length(p) / abs(dr), trap);
     }
 
     vec3 getNormal(vec3 p, float t) {
         float eps = max(0.0005, 0.001 * t); 
         vec2 e = vec2(eps, 0.0);
-        // Note: Extract the .x component which holds the distance
         vec3 n = map(p).x - vec3(map(p - e.xyy).x, map(p - e.yxy).x, map(p - e.yyx).x);
         return normalize(n);
     }
@@ -457,10 +439,7 @@ const fsAccum = `#version 300 es
             vec3 n = getNormal(p, t);      
             vec3 lightDir = normalize(u_lightPos - p);
             
-            // Get exact trap value at the surface
             float trap = map(p).y;
-            
-            // Procedural Cosine Palette
             vec3 baseCol = u_palA + u_palB * cos(6.28318 * (u_palC * (trap * u_colorBlend) + u_palD));
             
             float dif = clamp(dot(n, lightDir), 0.0, 1.0);
@@ -585,7 +564,6 @@ const locBg = gl.getUniformLocation(accumProgram, 'u_bgColor');
 const locBright = gl.getUniformLocation(accumProgram, 'u_brightness');
 const locLight = gl.getUniformLocation(accumProgram, 'u_lightPos');
 
-
 // --- Quaternion Math ---
 const Quat = {
     multiply: (a, b) => ({ w: a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z, x: a.w*b.x + a.x*b.w + a.y*b.z - a.z*b.y, y: a.w*b.y - a.x*b.z + a.y*b.w + a.z*b.x, z: a.w*b.z + a.x*b.y - a.y*b.x + a.z*b.w }),
@@ -694,7 +672,7 @@ function handleForwardMovement(amount) {
 // --- Dedicated Tile Renderer ---
 const hash = (n) => { let f = Math.sin(n) * 43758.5453; return f - Math.floor(f); };
 
-function drawExportFrame(targetWidth, targetHeight, offsetX, offsetY, frameIndex, viewW, viewH, fboWrite, texRead) {
+function drawExportFrame(targetWidth, targetHeight, offsetX, offsetY, frameIndex, fboWrite, texRead) {
     let fwd = Quat.rotateVec3(cRot, [0, 0, -1]);
     let right = Quat.rotateVec3(cRot, [1, 0, 0]);
     let up = Quat.rotateVec3(cRot, [0, 1, 0]);
