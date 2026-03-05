@@ -251,15 +251,18 @@ canvas.addEventListener('contextmenu', e => e.preventDefault());
 // --- Mouse Events ---
 canvas.addEventListener('mousedown', (e) => {
     if (e.button === 0) {
-        let cx = canvas.width / 2;
-        let cy = canvas.height / 2;
-        let dx = e.offsetX - cx;
-        let dy = e.offsetY - cy;
+        // Calculate the border thickness (18% of the smaller screen dimension)
+        let borderSize = Math.min(canvas.width, canvas.height) * 0.18;
         
-        // Outer 18% of the screen (radius > 82%) triggers Roll
-        if (Math.hypot(dx, dy) > Math.min(cx, cy) * 0.82) {
+        // Check if the click is within that border on any of the 4 sides
+        let isEdgeX = e.offsetX < borderSize || e.offsetX > canvas.width - borderSize;
+        let isEdgeY = e.offsetY < borderSize || e.offsetY > canvas.height - borderSize;
+        
+        if (isEdgeX || isEdgeY) {
             isRolling = true;
-            lastRollAngle = Math.atan2(dy, dx);
+            let cx = canvas.width / 2;
+            let cy = canvas.height / 2;
+            lastRollAngle = Math.atan2(e.offsetY - cy, e.offsetX - cx);
         } else {
             isLooking = true;
         }
@@ -312,19 +315,23 @@ canvas.addEventListener('wheel', (e) => {
 canvas.addEventListener('touchstart', (e) => {
     e.preventDefault();
     if (e.touches.length === 1) {
-        let cx = canvas.width / 2;
-        let cy = canvas.height / 2;
-        let dx = e.touches[0].clientX - cx;
-        let dy = e.touches[0].clientY - cy;
+        let tx = e.touches[0].clientX;
+        let ty = e.touches[0].clientY;
         
-        // Outer 18% triggers Roll
-        if (Math.hypot(dx, dy) > Math.min(cx, cy) * 0.82) {
+        let borderSize = Math.min(canvas.width, canvas.height) * 0.18;
+        
+        let isEdgeX = tx < borderSize || tx > canvas.width - borderSize;
+        let isEdgeY = ty < borderSize || ty > canvas.height - borderSize;
+        
+        if (isEdgeX || isEdgeY) {
             isRolling = true;
-            lastRollAngle = Math.atan2(dy, dx);
+            let cx = canvas.width / 2;
+            let cy = canvas.height / 2;
+            lastRollAngle = Math.atan2(ty - cy, tx - cx);
         } else {
             isLooking = true;
         }
-        lastInput = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        lastInput = { x: tx, y: ty };
     } else if (e.touches.length === 2) {
         isLooking = false;
         isRolling = false;
