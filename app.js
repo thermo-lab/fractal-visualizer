@@ -15,7 +15,7 @@ function resizeCanvas() {
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
 
-// --- UI Controls Setup ---
+// --- UI Parameters ---
 const params = {
     scale: 2.0,
     iterations: 12,
@@ -27,7 +27,59 @@ const params = {
     lightZ: -2.0
 };
 
+// --- Camera State ---
+let tRot = { w: 1, x: 0, y: 0, z: 0 }; 
+let tPos = { x: 0.0, y: 0.0, z: 4.0 }; 
+let cRot = { w: 1, x: 0, y: 0, z: 0 }; 
+let cPos = { x: 0.0, y: 0.0, z: 4.0 }; 
+
+// --- File I/O Logic ---
+const ioLogic = {
+    saveState: () => {
+        const state = {
+            params: params,
+            camera: { pos: tPos, rot: tRot }
+        };
+        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(state, null, 2));
+        const downloadAnchorNode = document.createElement('a');
+        downloadAnchorNode.setAttribute("href", dataStr);
+        downloadAnchorNode.setAttribute("download", "fractal_state.json");
+        document.body.appendChild(downloadAnchorNode); 
+        downloadAnchorNode.click();
+        downloadAnchorNode.remove();
+    },
+    loadState: () => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'application/json';
+        input.onchange = e => {
+            const file = e.target.files[0];
+            const reader = new FileReader();
+            reader.onload = readerEvent => {
+                const state = JSON.parse(readerEvent.target.result);
+                
+                // 1. Update the UI parameters
+                Object.assign(params, state.params);
+                
+                // Force the lil-gui sliders and color pickers to visually update
+                gui.controllersRecursive().forEach(c => c.updateDisplay());
+                
+                // 2. Teleport the camera instantly
+                tPos = state.camera.pos;
+                cPos = { x: tPos.x, y: tPos.y, z: tPos.z }; 
+                
+                tRot = state.camera.rot;
+                cRot = { w: tRot.w, x: tRot.x, y: tRot.y, z: tRot.z }; 
+            }
+            reader.readAsText(file);
+        }
+        input.click();
+    }
+};
+
+// --- GUI Setup ---
 const gui = new GUI({ title: 'Fractal Controls' });
+
 const mathFolder = gui.addFolder('Mathematics');
 mathFolder.add(params, 'scale', -3.0, 3.0).name('Box Scale');
 mathFolder.add(params, 'iterations', 1, 30, 1).name('Iterations');
@@ -39,6 +91,10 @@ visualFolder.add(params, 'brightness', 0.1, 5.0, 0.1).name('Brightness');
 visualFolder.add(params, 'lightX', -10.0, 10.0).name('Light X');
 visualFolder.add(params, 'lightY', -10.0, 10.0).name('Light Y');
 visualFolder.add(params, 'lightZ', -10.0, 10.0).name('Light Z');
+
+const ioFolder = gui.addFolder('Import / Export');
+ioFolder.add(ioLogic, 'saveState').name('Save State (JSON)');
+ioFolder.add(ioLogic, 'loadState').name('Load State (JSON)');
 
 // --- Shaders ---
 const vsSource = `#version 300 es
@@ -273,7 +329,7 @@ const Quat = {
     }
 };
 
-// --- First-Person Camera State ---
+// --- Input Variables ---
 let isLooking = false;
 let isPanning = false;
 let isRolling = false;
@@ -281,11 +337,6 @@ let lastRollAngle = 0;
 let lastInput = { x: 0, y: 0 };
 let lastTouchDistance = 0;
 let lastTouchCenter = { x: 0, y: 0 };
-
-let tRot = { w: 1, x: 0, y: 0, z: 0 }; 
-let tPos = { x: 0.0, y: 0.0, z: 4.0 }; 
-let cRot = { w: 1, x: 0, y: 0, z: 0 }; 
-let cPos = { x: 0.0, y: 0.0, z: 4.0 }; 
 
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 
