@@ -5,7 +5,7 @@ const gl = canvas.getContext('webgl2', { preserveDrawingBuffer: true });
 
 if (!gl) alert('WebGL2 is not supported by your browser.');
 
-// --- State Variables (Moved to top to prevent Reference Errors) ---
+// --- State Variables ---
 let isDirty = true;
 let frameCount = 0;
 let isExporting = false; 
@@ -19,7 +19,7 @@ let isLooking = false, isPanning = false, isRolling = false;
 let lastRollAngle = 0, lastInput = { x: 0, y: 0 };
 let lastTouchDistance = 0, lastTouchCenter = { x: 0, y: 0 };
 
-// --- Inject CSS Crop Guide Automatically ---
+// --- Inject UI Elements Automatically ---
 let cropGuide = document.getElementById('crop-guide');
 if (!cropGuide) {
     cropGuide = document.createElement('div');
@@ -27,6 +27,23 @@ if (!cropGuide) {
     cropGuide.style.cssText = 'position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); border: 2px dashed rgba(255, 255, 255, 0.7); box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.6); pointer-events: none; z-index: 10; display: none;';
     document.body.appendChild(cropGuide);
 }
+
+const exportOverlay = document.createElement('div');
+exportOverlay.style.cssText = 'position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.85); z-index: 9999; display: none; flex-direction: column; justify-content: center; align-items: center; color: white; font-family: monospace; text-align: center;';
+const exportTitle = document.createElement('h1');
+exportTitle.innerText = 'RENDERING HIGH-RES EXPORT';
+const exportStatus = document.createElement('div');
+exportStatus.style.cssText = 'margin: 20px 0; font-size: 1.2rem;';
+const exportBarBg = document.createElement('div');
+exportBarBg.style.cssText = 'width: 60%; max-width: 600px; height: 24px; border: 2px solid white; border-radius: 12px; overflow: hidden;';
+const exportBarFill = document.createElement('div');
+exportBarFill.style.cssText = 'width: 0%; height: 100%; background: white; transition: width 0.1s;';
+exportBarBg.appendChild(exportBarFill);
+exportOverlay.appendChild(exportTitle);
+exportOverlay.appendChild(exportStatus);
+exportOverlay.appendChild(exportBarBg);
+document.body.appendChild(exportOverlay);
+
 
 // --- UI Parameters ---
 const params = {
@@ -75,7 +92,7 @@ function resizeCanvas() {
     isDirty = true;
 }
 window.addEventListener('resize', resizeCanvas);
-resizeCanvas(); // Safe to call now!
+resizeCanvas(); 
 
 // --- File I/O & Export Logic ---
 const generateUID = () => Math.random().toString(36).substring(2, 8);
@@ -105,6 +122,23 @@ fileInput.onchange = e => {
     e.target.value = ''; 
 };
 
+// Isolated FBO creation strictly for tiled export
+function createExportFBOs(w, h) {
+    const createTex = () => {
+        const tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        return tex;
+    };
+    const tA = createTex(), tB = createTex();
+    const fA = gl.createFramebuffer(), fB = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fA); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tA, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fB); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tB, 0);
+    return { tA, tB, fA, fB };
+}
+
 async function exportHighResImage() {
     if (isExporting) return;
     isExporting = true;
@@ -113,7 +147,12 @@ async function exportHighResImage() {
     updateCropGuide();
     
     const uid = generateUID();
-    document.title = `Exporting... (0%)`;
+    exportOverlay.style.display = 'flex';
+    exportStatus.innerText = 'Initializing Memory...';
+    exportBarFill.style.width = '0%';
+    
+    // Yield to let the UI strictly paint the overlay before we lock the GPU
+    await new Promise(r => setTimeout(r, 100));
 
     const totalW = params.exportWidth;
     const totalH = params.exportHeight;
@@ -121,55 +160,96 @@ async function exportHighResImage() {
     const cols = Math.ceil(totalW / tileSize);
     const rows = Math.ceil(totalH / tileSize);
     
-    const finalCanvas = document.createElement('canvas');
-    finalCanvas.width = totalW;
-    finalCanvas.height = totalH;
-    const ctx = finalCanvas.getContext('2d');
+    let exp = null;
 
-    canvas.width = tileSize;
-    canvas.height = tileSize;
-    gl.viewport(0, 0, tileSize, tileSize);
-    rebuildFBOs(tileSize, tileSize);
+    try {
+        const finalCanvas = document.createElement('canvas');
+        finalCanvas.width = totalW;
+        finalCanvas.height = totalH;
+        const ctx = finalCanvas.getContext('2d');
 
-    for (let y = 0; y < rows; y++) {
-        for (let x = 0; x < cols; x++) {
-            const curW = Math.min(tileSize, totalW - x * tileSize);
-            const curH = Math.min(tileSize, totalH - y * tileSize);
-            
-            for (let s = 0; s < params.exportSamples; s++) {
-                drawFrame(totalW, totalH, x * tileSize, y * tileSize, s, curW, curH);
-                if (s % 10 === 0) await new Promise(r => setTimeout(r, 1)); 
+        // Note: We DO NOT change canvas.width or canvas.height here. We only change the viewport.
+        gl.viewport(0, 0, tileSize, tileSize);
+        exp = createExportFBOs(tileSize, tileSize);
+
+        for (let y = 0; y < rows; y++) {
+            for (let x = 0; x < cols; x++) {
+                const curW = Math.min(tileSize, totalW - x * tileSize);
+                const curH = Math.min(tileSize, totalH - y * tileSize);
+                
+                let readTex = exp.tB;
+                let writeFbo = exp.fA;
+
+                // Render TAA Passes for this specific tile
+                for (let s = 0; s < params.exportSamples; s++) {
+                    drawExportFrame(totalW, totalH, x * tileSize, y * tileSize, s, tileSize, tileSize, writeFbo, readTex);
+                    
+                    // Swap logic
+                    let tempT = readTex; readTex = writeFbo === exp.fA ? exp.tA : exp.tB;
+                    writeFbo = writeFbo === exp.fA ? exp.fB : exp.fA;
+
+                    // Yield frequently to prevent the browser watchdog from killing the context
+                    if (s % 10 === 0) await new Promise(r => setTimeout(r, 5)); 
+                }
+
+                // The final resolved frame is in the FBO opposite of the current writeFbo
+                let finalFbo = writeFbo === exp.fA ? exp.fB : exp.fA;
+                gl.bindFramebuffer(gl.FRAMEBUFFER, finalFbo);
+                
+                const pixels = new Uint8Array(curW * curH * 4);
+                gl.readPixels(0, 0, curW, curH, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+
+                // Flip Y-axis (WebGL reads bottom-up, Canvas writes top-down)
+                const imageData = ctx.createImageData(curW, curH);
+                for (let i = 0; i < curH; i++) {
+                    const srcOffset = (curH - 1 - i) * curW * 4;
+                    const dstOffset = i * curW * 4;
+                    imageData.data.set(pixels.subarray(srcOffset, srcOffset + curW * 4), dstOffset);
+                }
+                
+                ctx.putImageData(imageData, x * tileSize, totalH - (y * tileSize) - curH);
+                
+                // Update UI Progress
+                let progress = ((y * cols + x + 1) / (cols * rows)) * 100;
+                exportStatus.innerText = `Processing Tile ${y * cols + x + 1} of ${cols * rows}`;
+                exportBarFill.style.width = `${progress}%`;
+                
+                // Crucial yield so the progress bar visually updates
+                await new Promise(r => setTimeout(r, 10)); 
             }
-
-            const pixels = new Uint8Array(curW * curH * 4);
-            gl.readPixels(0, 0, curW, curH, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-
-            const imageData = ctx.createImageData(curW, curH);
-            for (let i = 0; i < curH; i++) {
-                const srcOffset = (curH - 1 - i) * curW * 4;
-                const dstOffset = i * curW * 4;
-                imageData.data.set(pixels.subarray(srcOffset, srcOffset + curW * 4), dstOffset);
-            }
-            
-            ctx.putImageData(imageData, x * tileSize, totalH - (y * tileSize) - curH);
-            
-            let progress = Math.round(((y * cols + x + 1) / (cols * rows)) * 100);
-            document.title = `Exporting... (${progress}%)`;
         }
-    }
 
-    finalCanvas.toBlob((blob) => {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `fractal_${uid}_${totalW}x${totalH}.png`;
-        a.click();
-        URL.revokeObjectURL(url);
-        document.title = '3D Fractal Explorer';
-        
+        exportStatus.innerText = 'Encoding PNG (This may take a minute)...';
+        await new Promise(r => setTimeout(r, 100)); 
+
+        finalCanvas.toBlob((blob) => {
+            if(!blob) {
+                alert("Image too large to encode to PNG! Try lowering the resolution.");
+                return;
+            }
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `fractal_${uid}_${totalW}x${totalH}.png`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }, 'image/png');
+
+    } catch (e) {
+        alert("Export failed: " + e.message);
+    } finally {
+        // Cleanup isolated FBOs to prevent memory leaks
+        if(exp) {
+            gl.deleteTexture(exp.tA); gl.deleteTexture(exp.tB);
+            gl.deleteFramebuffer(exp.fA); gl.deleteFramebuffer(exp.fB);
+        }
         isExporting = false;
-        resizeCanvas(); 
-    }, 'image/png');
+        exportOverlay.style.display = 'none';
+        
+        // Restore main viewport
+        gl.viewport(0, 0, canvas.width, canvas.height); 
+        isDirty = true;
+    }
 }
 
 const ioLogic = {
@@ -202,8 +282,8 @@ visualFolder.add(params, 'lightZ', -10.0, 10.0).name('Light Z');
 
 const exportFolder = gui.addFolder('High-Res Export');
 exportFolder.add(params, 'showCrop').name('Show Crop Guide').onChange(updateCropGuide);
-exportFolder.add(params, 'exportWidth', 1000, 16000, 1).name('Width (px)').onChange(updateCropGuide);
-exportFolder.add(params, 'exportHeight', 1000, 16000, 1).name('Height (px)').onChange(updateCropGuide);
+exportFolder.add(params, 'exportWidth', 1000, 16384, 1).name('Width (px)').onChange(updateCropGuide);
+exportFolder.add(params, 'exportHeight', 1000, 16384, 1).name('Height (px)').onChange(updateCropGuide);
 exportFolder.add(params, 'exportSamples', 10, 500, 1).name('Quality (TAA Samples)');
 exportFolder.add(ioLogic, 'exportImage').name('RENDER IMAGE');
 
@@ -371,7 +451,7 @@ function compileProgram(vs, fs) {
 const accumProgram = compileProgram(vsAccum, fsAccum);
 const screenProgram = compileProgram(vsScreen, fsScreen);
 
-// --- WebGL FBO Setup ---
+// --- WebGL Main Viewport FBO Setup ---
 gl.getExtension('EXT_color_buffer_float'); 
 
 const positionBuffer = gl.createBuffer();
@@ -383,7 +463,7 @@ gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
 
 let texA, texB, fboA, fboB;
 
-function rebuildFBOs(w, h) {
+function rebuildMainFBOs(w, h) {
     if(texA) gl.deleteTexture(texA);
     if(texB) gl.deleteTexture(texB);
     if(fboA) gl.deleteFramebuffer(fboA);
@@ -401,7 +481,7 @@ function rebuildFBOs(w, h) {
     fboA = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, fboA); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texA, 0);
     fboB = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, fboB); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texB, 0);
 }
-rebuildFBOs(canvas.width, canvas.height);
+rebuildMainFBOs(canvas.width, canvas.height);
 
 const locTargetRes = gl.getUniformLocation(accumProgram, 'u_targetResolution');
 const locTileOffset = gl.getUniformLocation(accumProgram, 'u_tileOffset');
@@ -525,15 +605,13 @@ function handleForwardMovement(amount) {
     tPos.x += fwd.x * amount; tPos.y += fwd.y * amount; tPos.z += fwd.z * amount;
 }
 
-// --- Draw Dispatcher ---
-function drawFrame(targetWidth, targetHeight, offsetX, offsetY, frameIndex, viewW, viewH) {
-    gl.viewport(0, 0, viewW, viewH);
-
+// --- Dedicated Tile Renderer ---
+function drawExportFrame(targetWidth, targetHeight, offsetX, offsetY, frameIndex, viewW, viewH, fboWrite, texRead) {
     let fwd = Quat.rotateVec3(cRot, [0, 0, -1]);
     let right = Quat.rotateVec3(cRot, [1, 0, 0]);
     let up = Quat.rotateVec3(cRot, [0, 1, 0]);
 
-    gl.bindFramebuffer(gl.FRAMEBUFFER, fboA);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fboWrite);
     gl.useProgram(accumProgram);
 
     let posLoc = gl.getAttribLocation(accumProgram, 'a_position');
@@ -562,11 +640,39 @@ function drawFrame(targetWidth, targetHeight, offsetX, offsetY, frameIndex, view
     gl.uniform2f(locJitter, jx, jy);
 
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, texB);
+    gl.bindTexture(gl.TEXTURE_2D, texRead);
     gl.uniform1i(locPrev, 0);
 
     gl.drawArrays(gl.TRIANGLES, 0, 6);
+}
 
+// --- Main Render Loop (Viewport Preview) ---
+let texWidth = canvas.width, texHeight = canvas.height;
+
+function render(time) {
+    if (isExporting) {
+        requestAnimationFrame(render);
+        return; // Halt viewport rendering to free GPU for the export engine
+    }
+
+    if (canvas.width !== texWidth || canvas.height !== texHeight) {
+        texWidth = canvas.width; texHeight = canvas.height;
+        rebuildMainFBOs(texWidth, texHeight);
+        isDirty = true;
+    }
+
+    cPos.x += (tPos.x - cPos.x) * 0.1; cPos.y += (tPos.y - cPos.y) * 0.1; cPos.z += (tPos.z - cPos.z) * 0.1;
+    cRot = Quat.slerp(cRot, tRot, 0.1);
+
+    if (Math.abs(tPos.x - cPos.x) > 0.0001 || Math.abs(tRot.x - cRot.x) > 0.0001 || isLooking || isPanning || isRolling || isDirty) {
+        frameCount = 0; isDirty = false;
+    }
+
+    // Accumulate Viewport
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    drawExportFrame(canvas.width, canvas.height, 0, 0, frameCount, canvas.width, canvas.height, fboA, texB);
+
+    // Draw Viewport to Screen
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.useProgram(screenProgram);
     let screenPosLoc = gl.getAttribLocation(screenProgram, 'a_position');
@@ -580,31 +686,6 @@ function drawFrame(targetWidth, targetHeight, offsetX, offsetY, frameIndex, view
 
     let tempTex = texA; texA = texB; texB = tempTex;
     let tempFbo = fboA; fboA = fboB; fboB = tempFbo;
-}
-
-// --- Main Render Loop ---
-let texWidth = canvas.width, texHeight = canvas.height;
-
-function render(time) {
-    if (isExporting) {
-        requestAnimationFrame(render);
-        return; 
-    }
-
-    if (canvas.width !== texWidth || canvas.height !== texHeight) {
-        texWidth = canvas.width; texHeight = canvas.height;
-        rebuildFBOs(texWidth, texHeight);
-        isDirty = true;
-    }
-
-    cPos.x += (tPos.x - cPos.x) * 0.1; cPos.y += (tPos.y - cPos.y) * 0.1; cPos.z += (tPos.z - cPos.z) * 0.1;
-    cRot = Quat.slerp(cRot, tRot, 0.1);
-
-    if (Math.abs(tPos.x - cPos.x) > 0.0001 || Math.abs(tRot.x - cRot.x) > 0.0001 || isLooking || isPanning || isRolling || isDirty) {
-        frameCount = 0; isDirty = false;
-    }
-
-    drawFrame(canvas.width, canvas.height, 0, 0, frameCount, canvas.width, canvas.height);
     
     frameCount++;
     requestAnimationFrame(render);
