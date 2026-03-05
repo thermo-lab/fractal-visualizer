@@ -49,7 +49,14 @@ document.body.appendChild(exportOverlay);
 const params = {
     scale: 2.0,
     iterations: 12,
-    baseColor: [0.8, 0.4, 0.1],
+
+    // NEW: Algorithmic Palette Vectors
+    palA: [0.5, 0.5, 0.5],     // Offset
+    palB: [0.5, 0.5, 0.5],     // Amplitude
+    palC: [1.0, 1.0, 1.0],     // Frequency
+    palD: [0.00, 0.33, 0.67],  // Phase (Default creates a rainbow/blue-orange vibe)
+    colorBlend: 1.5,           // Wrap speed
+
     bgColor: [0.02, 0.02, 0.03],
     brightness: 1.2,
     lightX: 2.0,
@@ -198,7 +205,7 @@ async function exportHighResImage() {
                 let writeFbo = exp.fA;
 
                 for (let s = 0; s < params.exportSamples; s++) {
-                    drawExportFrame(totalW, totalH, x * tileSize, y * tileSize, s, tileSize, tileSize, writeFbo, readTex);
+                    drawExportFrame(totalW, totalH, x * tileSize, y * tileSize, s, writeFbo, readTex);
 
                     let tempT = readTex; readTex = writeFbo === exp.fA ? exp.tA : exp.tB;
                     writeFbo = writeFbo === exp.fA ? exp.fB : exp.fA;
@@ -291,14 +298,33 @@ const mathFolder = gui.addFolder('Mathematics');
 mathFolder.add(params, 'scale', -3.0, 3.0).name('Box Scale');
 mathFolder.add(params, 'iterations', 1, 30, 1).name('Iterations');
 
-const visualFolder = gui.addFolder('Visuals');
-visualFolder.addColor(params, 'baseColor').name('Surface Color');
-visualFolder.addColor(params, 'bgColor').name('Background Color');
+// NEW: Dedicated Palette Sub-Folders
+const palFolder = gui.addFolder('Algorithmic Palette');
+palFolder.addColor(params, 'palA').name('Color Offset');
+palFolder.addColor(params, 'palB').name('Color Contrast');
+
+const freqFolder = palFolder.addFolder('Frequency (RGB)');
+freqFolder.add(params.palC, 0, 0.0, 5.0, 0.01).name('Red Freq');
+freqFolder.add(params.palC, 1, 0.0, 5.0, 0.01).name('Green Freq');
+freqFolder.add(params.palC, 2, 0.0, 5.0, 0.01).name('Blue Freq');
+
+const phaseFolder = palFolder.addFolder('Phase Shift (RGB)');
+phaseFolder.add(params.palD, 0, 0.0, 1.0, 0.01).name('Red Phase');
+phaseFolder.add(params.palD, 1, 0.0, 1.0, 0.01).name('Green Phase');
+phaseFolder.add(params.palD, 2, 0.0, 1.0, 0.01).name('Blue Phase');
+
+palFolder.add(params, 'colorBlend', 0.1, 10.0, 0.1).name('Wrap Tightness');
+
+const visualFolder = gui.addFolder('Lighting & Environment');
+// Removed the old 'baseColor' since the palette overrides it now
+visualFolder.addColor(params, 'bgColor').name('Background / Fog');
 visualFolder.add(params, 'brightness', 0.1, 5.0, 0.1).name('Brightness');
 visualFolder.add(params, 'lightX', -10.0, 10.0).name('Light X');
 visualFolder.add(params, 'lightY', -10.0, 10.0).name('Light Y');
 visualFolder.add(params, 'lightZ', -10.0, 10.0).name('Light Z');
-visualFolder.add(params, 'previewSamples', 1, 200, 1).name('Preview Quality'); // NEW
+visualFolder.add(params, 'previewSamples', 1, 200, 1).name('Preview Quality');
+
+// ... (Keep the High-Res Export and Import/Export State folders below this)
 
 const exportFolder = gui.addFolder('High-Res Export');
 exportFolder.add(params, 'showCrop').name('Show Crop Guide').onChange(updateCropGuide);
@@ -333,7 +359,14 @@ const fsAccum = `#version 300 es
 
     uniform float u_scale;
     uniform int u_iterations;
-    uniform vec3 u_baseColor;
+    
+    // NEW: Palette Uniforms
+    uniform vec3 u_palA;
+    uniform vec3 u_palB;
+    uniform vec3 u_palC;
+    uniform vec3 u_palD;
+    uniform float u_colorBlend;
+
     uniform vec3 u_bgColor;
     uniform float u_brightness;
     uniform vec3 u_lightPos;
@@ -342,9 +375,12 @@ const fsAccum = `#version 300 es
     uniform float u_frame;
     uniform vec2 u_jitter;
 
-    float map(vec3 p) {
+    // NEW: Map function now returns a vec2(distance, orbit_trap)
+    vec2 map(vec3 p) {
         vec3 offset = p;
         float dr = 1.0;
+        float trap = 1e20; // Initialize trap
+
         for (int i = 0; i < 30; i++) {
             if (i >= u_iterations) break; 
             p = clamp(p, -1.0, 1.0) * 2.0 - p;
@@ -353,14 +389,18 @@ const fsAccum = `#version 300 es
             else if (r2 < 1.0) { p /= r2; dr /= r2; }
             p = p * u_scale + offset;
             dr = dr * abs(u_scale) + 1.0;
+            
+            // Track the point's minimum distance to the origin
+            trap = min(trap, length(p));
         }
-        return length(p) / abs(dr);
+        return vec2(length(p) / abs(dr), trap);
     }
 
     vec3 getNormal(vec3 p, float t) {
         float eps = max(0.0005, 0.001 * t); 
         vec2 e = vec2(eps, 0.0);
-        vec3 n = map(p) - vec3(map(p - e.xyy), map(p - e.yxy), map(p - e.yyx));
+        // Note: Extract the .x component which holds the distance
+        vec3 n = map(p).x - vec3(map(p - e.xyy).x, map(p - e.yxy).x, map(p - e.yyx).x);
         return normalize(n);
     }
 
@@ -368,7 +408,7 @@ const fsAccum = `#version 300 es
         float occ = 0.0; float sca = 1.0;
         for(int i = 0; i < 5; i++) {
             float h = 0.01 + 0.12 * float(i) / 4.0;
-            float d = map(pos + h * nor);
+            float d = map(pos + h * nor).x;
             occ += (h - d) * sca; sca *= 0.95;
             if(occ > 0.35) break;
         }
@@ -378,7 +418,7 @@ const fsAccum = `#version 300 es
     float calcShadow(vec3 ro, vec3 rd) {
         float res = 1.0; float t = 0.05; 
         for(int i = 0; i < 30; i++) {
-            float h = map(ro + rd * t);
+            float h = map(ro + rd * t).x;
             res = min(res, 8.0 * h / t); 
             t += clamp(h, 0.02, 0.1);
             if(h < 0.001 || t > 10.0) break;
@@ -395,7 +435,7 @@ const fsAccum = `#version 300 es
 
         for(int i = 0; i < max_steps; i++) {
             vec3 p = ro + rd * t;
-            float d = map(p);
+            float d = map(p).x;
             if(abs(d) < 0.001 * t || t > max_dist) break;
             t += d * 0.8; 
         }
@@ -405,14 +445,20 @@ const fsAccum = `#version 300 es
             vec3 n = getNormal(p, t);      
             vec3 lightDir = normalize(u_lightPos - p);
             
+            // Get exact trap value at the surface
+            float trap = map(p).y;
+            
+            // Procedural Cosine Palette
+            vec3 baseCol = u_palA + u_palB * cos(6.28318 * (u_palC * (trap * u_colorBlend) + u_palD));
+            
             float dif = clamp(dot(n, lightDir), 0.0, 1.0);
             float shadow = calcShadow(p, lightDir);
             float ao = calcAO(p, n);
             
-            col = u_baseColor * (dif * shadow + 0.15 * ao);
+            col = baseCol * (dif * shadow + 0.15 * ao);
             
             float rim = 1.0 - clamp(dot(-rd, n), 0.0, 1.0);
-            vec3 rimColor = mix(u_baseColor, vec3(1.0), 0.6); 
+            vec3 rimColor = mix(baseCol, vec3(1.0), 0.6); 
             col += rimColor * pow(rim, 4.0) * 0.4 * ao; 
         }
         return mix(col, bgCol, 1.0 - exp(-0.03 * t));
@@ -516,7 +562,13 @@ const locFrame = gl.getUniformLocation(accumProgram, 'u_frame');
 const locJitter = gl.getUniformLocation(accumProgram, 'u_jitter');
 const locScale = gl.getUniformLocation(accumProgram, 'u_scale');
 const locIter = gl.getUniformLocation(accumProgram, 'u_iterations');
-const locBase = gl.getUniformLocation(accumProgram, 'u_baseColor');
+
+const locPalA = gl.getUniformLocation(accumProgram, 'u_palA');
+const locPalB = gl.getUniformLocation(accumProgram, 'u_palB');
+const locPalC = gl.getUniformLocation(accumProgram, 'u_palC');
+const locPalD = gl.getUniformLocation(accumProgram, 'u_palD');
+const locColorBlend = gl.getUniformLocation(accumProgram, 'u_colorBlend');
+
 const locBg = gl.getUniformLocation(accumProgram, 'u_bgColor');
 const locBright = gl.getUniformLocation(accumProgram, 'u_brightness');
 const locLight = gl.getUniformLocation(accumProgram, 'u_lightPos');
@@ -653,7 +705,13 @@ function drawExportFrame(targetWidth, targetHeight, offsetX, offsetY, frameIndex
 
     gl.uniform1f(locScale, params.scale);
     gl.uniform1i(locIter, params.iterations);
-    gl.uniform3f(locBase, params.baseColor[0], params.baseColor[1], params.baseColor[2]);
+
+    gl.uniform3f(locPalA, params.palA[0], params.palA[1], params.palA[2]);
+    gl.uniform3f(locPalB, params.palB[0], params.palB[1], params.palB[2]);
+    gl.uniform3f(locPalC, params.palC[0], params.palC[1], params.palC[2]);
+    gl.uniform3f(locPalD, params.palD[0], params.palD[1], params.palD[2]);
+    gl.uniform1f(locColorBlend, params.colorBlend);
+
     gl.uniform3f(locBg, params.bgColor[0], params.bgColor[1], params.bgColor[2]);
     gl.uniform1f(locBright, params.brightness);
     gl.uniform3f(locLight, params.lightX, params.lightY, params.lightZ);
@@ -686,13 +744,11 @@ function render(time) {
         isDirty = true;
     }
 
-// 1. Camera Interpolation
     cPos.x += (tPos.x - cPos.x) * 0.1;
     cPos.y += (tPos.y - cPos.y) * 0.1;
     cPos.z += (tPos.z - cPos.z) * 0.1;
     cRot = Quat.slerp(cRot, tRot, 0.1);
 
-    // 2. Kill the "Lerp Tail" by snapping to target when microscopically close
     if (Math.abs(tPos.x - cPos.x) < 0.001) cPos.x = tPos.x;
     if (Math.abs(tPos.y - cPos.y) < 0.001) cPos.y = tPos.y;
     if (Math.abs(tPos.z - cPos.z) < 0.001) cPos.z = tPos.z;
@@ -701,7 +757,6 @@ function render(time) {
         cRot = { w: tRot.w, x: tRot.x, y: tRot.y, z: tRot.z };
     }
 
-    // 3. Movement Detection (FIXED: Now checking X, Y, and Z axes)
     let isMovingPos = Math.abs(tPos.x - cPos.x) > 0 || Math.abs(tPos.y - cPos.y) > 0 || Math.abs(tPos.z - cPos.z) > 0;
     let isMovingRot = Math.abs(tRot.x - cRot.x) > 0 || Math.abs(tRot.y - cRot.y) > 0 || Math.abs(tRot.z - cRot.z) > 0;
 
@@ -710,8 +765,8 @@ function render(time) {
         isDirty = false;
     }
 
-    // ONLY run the heavy raymarching shader if we haven't hit our quality cap yet
     if (frameCount < params.previewSamples) {
+        gl.viewport(0, 0, canvas.width, canvas.height);
 
         let jx = frameCount === 0 ? 0 : hash(frameCount * 12.9898) - 0.5;
         let jy = frameCount === 0 ? 0 : hash(frameCount * 78.2330) - 0.5;
@@ -738,7 +793,13 @@ function render(time) {
 
         gl.uniform1f(locScale, params.scale);
         gl.uniform1i(locIter, params.iterations);
-        gl.uniform3f(locBase, params.baseColor[0], params.baseColor[1], params.baseColor[2]);
+
+        gl.uniform3f(locPalA, params.palA[0], params.palA[1], params.palA[2]);
+        gl.uniform3f(locPalB, params.palB[0], params.palB[1], params.palB[2]);
+        gl.uniform3f(locPalC, params.palC[0], params.palC[1], params.palC[2]);
+        gl.uniform3f(locPalD, params.palD[0], params.palD[1], params.palD[2]);
+        gl.uniform1f(locColorBlend, params.colorBlend);
+
         gl.uniform3f(locBg, params.bgColor[0], params.bgColor[1], params.bgColor[2]);
         gl.uniform1f(locBright, params.brightness);
         gl.uniform3f(locLight, params.lightX, params.lightY, params.lightZ);
@@ -752,14 +813,12 @@ function render(time) {
 
         gl.drawArrays(gl.TRIANGLES, 0, 6);
 
-        // Swap ping-pong buffers
         let tempTex = texA; texA = texB; texB = tempTex;
         let tempFbo = fboA; fboA = fboB; fboB = tempFbo;
 
         frameCount++;
     }
 
-    // ALWAYS draw the result to the screen (this takes almost zero GPU effort)
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.useProgram(screenProgram);
     let screenPosLoc = gl.getAttribLocation(screenProgram, 'a_position');
@@ -767,7 +826,6 @@ function render(time) {
     gl.vertexAttribPointer(screenPosLoc, 2, gl.FLOAT, false, 0, 0);
 
     gl.activeTexture(gl.TEXTURE0);
-    // Draw texB, because the swap above leaves texB holding the most up-to-date image
     gl.bindTexture(gl.TEXTURE_2D, texB);
     gl.uniform1i(gl.getUniformLocation(screenProgram, 'u_texture'), 0);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
