@@ -256,8 +256,8 @@ canvas.addEventListener('mousedown', (e) => {
         let dx = e.offsetX - cx;
         let dy = e.offsetY - cy;
         
-        // If clicked in the outer 25% of the screen, trigger Roll
-        if (Math.hypot(dx, dy) > Math.min(cx, cy) * 0.75) {
+        // Outer 18% of the screen (radius > 82%) triggers Roll
+        if (Math.hypot(dx, dy) > Math.min(cx, cy) * 0.82) {
             isRolling = true;
             lastRollAngle = Math.atan2(dy, dx);
         } else {
@@ -283,16 +283,16 @@ canvas.addEventListener('mousemove', (e) => {
         if (dAngle < -Math.PI) dAngle += Math.PI * 2;
 
         let qRoll = Quat.fromAxisAngle([0, 0, 1], dAngle);
-        tRot = Quat.normalize(Quat.multiply(tRot, qRoll)); // Local roll
+        tRot = Quat.normalize(Quat.multiply(tRot, qRoll)); 
         lastRollAngle = newAngle;
     } 
     else if (isLooking) {
         let qYaw = Quat.fromAxisAngle([0, 1, 0], -deltaX * 0.005);
         let qPitch = Quat.fromAxisAngle([1, 0, 0], -deltaY * 0.005);
         
-        tRot = Quat.multiply(tRot, qPitch); // Local Pitch
-        tRot = Quat.multiply(qYaw, tRot);   // Global Yaw
-        tRot = Quat.normalize(tRot);
+        // Apply both Pitch AND Yaw locally for true 6DOF flight
+        let qTurn = Quat.multiply(qYaw, qPitch);
+        tRot = Quat.normalize(Quat.multiply(tRot, qTurn));
     }
 
     if (isPanning) handlePan(deltaX, deltaY);
@@ -317,7 +317,8 @@ canvas.addEventListener('touchstart', (e) => {
         let dx = e.touches[0].clientX - cx;
         let dy = e.touches[0].clientY - cy;
         
-        if (Math.hypot(dx, dy) > Math.min(cx, cy) * 0.75) {
+        // Outer 18% triggers Roll
+        if (Math.hypot(dx, dy) > Math.min(cx, cy) * 0.82) {
             isRolling = true;
             lastRollAngle = Math.atan2(dy, dx);
         } else {
@@ -356,9 +357,9 @@ canvas.addEventListener('touchmove', (e) => {
             let qYaw = Quat.fromAxisAngle([0, 1, 0], -deltaX * 0.005);
             let qPitch = Quat.fromAxisAngle([1, 0, 0], deltaY * 0.005); // Touch inverted Y fix
             
-            tRot = Quat.multiply(tRot, qPitch); 
-            tRot = Quat.multiply(qYaw, tRot);   
-            tRot = Quat.normalize(tRot);
+            // Pure local rotation
+            let qTurn = Quat.multiply(qYaw, qPitch);
+            tRot = Quat.normalize(Quat.multiply(tRot, qTurn));
         }
         lastInput = { x: e.touches[0].clientX, y: e.touches[0].clientY };
     } 
@@ -383,7 +384,7 @@ canvas.addEventListener('touchend', (e) => {
     }
     if (e.touches.length === 1) {
         lastInput = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-        isLooking = true; // Default back to looking if one finger lifts
+        isLooking = true; 
     }
 });
 canvas.addEventListener('touchcancel', () => { isLooking = false; isPanning = false; isRolling = false; });
