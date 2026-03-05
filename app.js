@@ -52,7 +52,6 @@ const fsSource = `#version 300 es
     uniform float u_time;
     uniform vec3 u_ro; 
     
-    // Explicit orientation vectors passed from JS Quaternions
     uniform vec3 u_camForward;
     uniform vec3 u_camRight;
     uniform vec3 u_camUp; 
@@ -86,10 +85,13 @@ const fsSource = `#version 300 es
         return length(p) / abs(dr);
     }
 
-    vec3 getNormal(vec3 p) {
-        float d = map(p);
-        vec2 e = vec2(0.001, 0.0);
-        vec3 n = d - vec3(
+    // UPDATED: Epsilon (e) now scales based on distance (t) to smooth out far-away noise
+    vec3 getNormal(vec3 p, float t) {
+        float eps = max(0.0005, 0.001 * t); 
+        vec2 e = vec2(eps, 0.0);
+        
+        // Slightly optimized normal calculation
+        vec3 n = map(p) - vec3(
             map(p - e.xyy),
             map(p - e.yxy),
             map(p - e.yyx)
@@ -99,38 +101,51 @@ const fsSource = `#version 300 es
 
     void main() {
         vec2 uv = (gl_FragCoord.xy * 2.0 - u_resolution.xy) / u_resolution.y;
-
-        // Construct Ray Direction directly from quaternion vectors
         vec3 rd = normalize(uv.x * u_camRight + uv.y * u_camUp + 1.0 * u_camForward); 
 
         float t = 0.0;
-        int max_steps = 150;
+        
+        // UPDATED: Increased max steps for higher quality edges
+        int max_steps = 250; 
         float max_dist = 100.0;
-        float surf_dist = 0.001;
 
         for(int i = 0; i < max_steps; i++) {
             vec3 p = u_ro + rd * t;
             float d = map(p);
-            t += d;
-            if(d < surf_dist || t > max_dist) break;
+            
+            // UPDATED: Dynamic hit threshold. Less precision needed far away = less noise.
+            if(abs(d) < 0.001 * t || t > max_dist) break;
+            
+            // UPDATED: Safe Stepping (0.8). Prevents rays from punching through thin walls.
+            t += d * 0.8; 
         }
 
-        vec3 col = vec3(0.0); 
+        // Set a dark ambient background color instead of pitch black
+        vec3 bgCol = vec3(0.02, 0.02, 0.03);
+        vec3 col = bgCol; 
 
         if(t < max_dist) {
             vec3 p = u_ro + rd * t;       
-            vec3 n = getNormal(p);      
+            
+            // Pass the distance 't' into the normal calculation
+            vec3 n = getNormal(p, t);      
             
             vec3 lightDir = normalize(u_lightPos - p);
             float dif = clamp(dot(n, lightDir), 0.0, 1.0);
-            float ambient = 0.1;
+            float ambient = 0.15;
             
             col = u_baseColor * (dif + ambient);
+            
+            // UPDATED: Rim light now derives from the UI base color and white
             float rim = 1.0 - clamp(dot(-rd, n), 0.0, 1.0);
-            col += vec3(0.2, 0.1, 0.0) * pow(rim, 4.0);
+            vec3 rimColor = mix(u_baseColor, vec3(1.0), 0.6); // Blend base with white
+            col += rimColor * pow(rim, 4.0) * 0.4;
         }
 
-        col = pow(col, vec3(1.0/2.2)); 
+        // NEW: Exponential depth fog. Fades distant geometry into the background color.
+        col = mix(col, bgCol, 1.0 - exp(-0.03 * t));
+
+        col = pow(col, vec3(1.0/2.2)); // Gamma correction
         outColor = vec4(col, 1.0);
     }
 `;
