@@ -1,10 +1,32 @@
 import GUI from 'https://cdn.jsdelivr.net/npm/lil-gui@0.19/+esm';
 
 const canvas = document.getElementById('glcanvas');
-const cropGuide = document.getElementById('crop-guide');
-const gl = canvas.getContext('webgl2', { preserveDrawingBuffer: true }); // Required for readPixels
+const gl = canvas.getContext('webgl2', { preserveDrawingBuffer: true }); 
 
 if (!gl) alert('WebGL2 is not supported by your browser.');
+
+// --- State Variables (Moved to top to prevent Reference Errors) ---
+let isDirty = true;
+let frameCount = 0;
+let isExporting = false; 
+
+let tRot = { w: 1, x: 0, y: 0, z: 0 }; 
+let tPos = { x: 0.0, y: 0.0, z: 4.0 }; 
+let cRot = { w: 1, x: 0, y: 0, z: 0 }; 
+let cPos = { x: 0.0, y: 0.0, z: 4.0 }; 
+
+let isLooking = false, isPanning = false, isRolling = false;
+let lastRollAngle = 0, lastInput = { x: 0, y: 0 };
+let lastTouchDistance = 0, lastTouchCenter = { x: 0, y: 0 };
+
+// --- Inject CSS Crop Guide Automatically ---
+let cropGuide = document.getElementById('crop-guide');
+if (!cropGuide) {
+    cropGuide = document.createElement('div');
+    cropGuide.id = 'crop-guide';
+    cropGuide.style.cssText = 'position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); border: 2px dashed rgba(255, 255, 255, 0.7); box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.6); pointer-events: none; z-index: 10; display: none;';
+    document.body.appendChild(cropGuide);
+}
 
 // --- UI Parameters ---
 const params = {
@@ -16,14 +38,12 @@ const params = {
     lightX: 2.0,
     lightY: 3.0,
     lightZ: -2.0,
-    // Export Settings
     showCrop: false,
-    exportWidth: 7200, // e.g., 24x36 inches at 300 DPI
+    exportWidth: 7200, 
     exportHeight: 10800,
-    exportSamples: 60  // TAA passes per tile
+    exportSamples: 60  
 };
 
-// --- Update CSS Crop Guide ---
 function updateCropGuide() {
     if (!params.showCrop) {
         cropGuide.style.display = 'none';
@@ -31,7 +51,6 @@ function updateCropGuide() {
     }
     cropGuide.style.display = 'block';
     
-    // Calculate aspect ratio fit within the window
     const targetAspect = params.exportWidth / params.exportHeight;
     const windowAspect = window.innerWidth / window.innerHeight;
     
@@ -56,21 +75,7 @@ function resizeCanvas() {
     isDirty = true;
 }
 window.addEventListener('resize', resizeCanvas);
-resizeCanvas();
-
-// --- Camera & Input State ---
-let tRot = { w: 1, x: 0, y: 0, z: 0 }; 
-let tPos = { x: 0.0, y: 0.0, z: 4.0 }; 
-let cRot = { w: 1, x: 0, y: 0, z: 0 }; 
-let cPos = { x: 0.0, y: 0.0, z: 4.0 }; 
-
-let isLooking = false, isPanning = false, isRolling = false;
-let lastRollAngle = 0, lastInput = { x: 0, y: 0 };
-let lastTouchDistance = 0, lastTouchCenter = { x: 0, y: 0 };
-
-let isDirty = true;
-let frameCount = 0;
-let isExporting = false; // Halts the main render loop during tiled export
+resizeCanvas(); // Safe to call now!
 
 // --- File I/O & Export Logic ---
 const generateUID = () => Math.random().toString(36).substring(2, 8);
@@ -100,11 +105,10 @@ fileInput.onchange = e => {
     e.target.value = ''; 
 };
 
-// Async Tiled Rendering Engine
 async function exportHighResImage() {
     if (isExporting) return;
     isExporting = true;
-    params.showCrop = false; // Hide guide to be safe
+    params.showCrop = false; 
     gui.controllersRecursive().forEach(c => c.updateDisplay());
     updateCropGuide();
     
@@ -113,17 +117,15 @@ async function exportHighResImage() {
 
     const totalW = params.exportWidth;
     const totalH = params.exportHeight;
-    const tileSize = 1024; // Safe chunk size for WebGL memory
+    const tileSize = 1024; 
     const cols = Math.ceil(totalW / tileSize);
     const rows = Math.ceil(totalH / tileSize);
     
-    // Create the final massive 2D canvas
     const finalCanvas = document.createElement('canvas');
     finalCanvas.width = totalW;
     finalCanvas.height = totalH;
     const ctx = finalCanvas.getContext('2d');
 
-    // Resize WebGL to tile size
     canvas.width = tileSize;
     canvas.height = tileSize;
     gl.viewport(0, 0, tileSize, tileSize);
@@ -134,17 +136,14 @@ async function exportHighResImage() {
             const curW = Math.min(tileSize, totalW - x * tileSize);
             const curH = Math.min(tileSize, totalH - y * tileSize);
             
-            // Render TAA Passes for this specific tile
             for (let s = 0; s < params.exportSamples; s++) {
                 drawFrame(totalW, totalH, x * tileSize, y * tileSize, s, curW, curH);
-                if (s % 10 === 0) await new Promise(r => setTimeout(r, 1)); // Yield to prevent browser freeze
+                if (s % 10 === 0) await new Promise(r => setTimeout(r, 1)); 
             }
 
-            // Extract pixels from GPU
             const pixels = new Uint8Array(curW * curH * 4);
             gl.readPixels(0, 0, curW, curH, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
 
-            // Flip Y-axis (WebGL reads bottom-up, 2D Canvas writes top-down)
             const imageData = ctx.createImageData(curW, curH);
             for (let i = 0; i < curH; i++) {
                 const srcOffset = (curH - 1 - i) * curW * 4;
@@ -152,7 +151,6 @@ async function exportHighResImage() {
                 imageData.data.set(pixels.subarray(srcOffset, srcOffset + curW * 4), dstOffset);
             }
             
-            // Map the tile to the correct spot on the massive canvas
             ctx.putImageData(imageData, x * tileSize, totalH - (y * tileSize) - curH);
             
             let progress = Math.round(((y * cols + x + 1) / (cols * rows)) * 100);
@@ -160,7 +158,6 @@ async function exportHighResImage() {
         }
     }
 
-    // Download the final image
     finalCanvas.toBlob((blob) => {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -170,7 +167,6 @@ async function exportHighResImage() {
         URL.revokeObjectURL(url);
         document.title = '3D Fractal Explorer';
         
-        // Restore standard viewport rendering
         isExporting = false;
         resizeCanvas(); 
     }, 'image/png');
@@ -227,10 +223,8 @@ const fsAccum = `#version 300 es
     precision highp float;
     out vec4 outColor;
     
-    // NEW: Target Resolution and Tile Offsets for Tiled Rendering
     uniform vec2 u_targetResolution;
     uniform vec2 u_tileOffset;
-
     uniform float u_time;
     uniform vec3 u_ro; 
     uniform vec3 u_camForward;
@@ -325,17 +319,13 @@ const fsAccum = `#version 300 es
     }
 
     void main() {
-        // Calculate the global pixel coordinate for this specific tile
         vec2 globalCoord = gl_FragCoord.xy + u_tileOffset;
-        
-        // Ray direction uses the target aspect ratio, not the canvas shape
         vec2 uv = (globalCoord + u_jitter - u_targetResolution.xy) / u_targetResolution.y;
         vec3 rd = normalize(uv.x * u_camRight + uv.y * u_camUp + 1.0 * u_camForward); 
         
         vec3 col = getSceneColor(u_ro, rd);
         col *= u_brightness; 
 
-        // Get viewport resolution for fetching from the history texture
         vec2 viewportRes = vec2(textureSize(u_prevFrame, 0));
         vec2 screenUV = gl_FragCoord.xy / viewportRes;
         
@@ -362,7 +352,7 @@ const fsScreen = `#version 300 es
     uniform sampler2D u_texture;
     void main() {
         vec3 col = texture(u_texture, v_uv).rgb;
-        col = pow(col, vec3(1.0/2.2)); // Final Gamma correction
+        col = pow(col, vec3(1.0/2.2)); 
         outColor = vec4(col, 1.0);
     }
 `;
@@ -415,7 +405,6 @@ rebuildFBOs(canvas.width, canvas.height);
 
 const locTargetRes = gl.getUniformLocation(accumProgram, 'u_targetResolution');
 const locTileOffset = gl.getUniformLocation(accumProgram, 'u_tileOffset');
-
 const locRo = gl.getUniformLocation(accumProgram, 'u_ro');
 const locFwd = gl.getUniformLocation(accumProgram, 'u_camForward');
 const locRight = gl.getUniformLocation(accumProgram, 'u_camRight');
@@ -552,7 +541,6 @@ function drawFrame(targetWidth, targetHeight, offsetX, offsetY, frameIndex, view
     gl.enableVertexAttribArray(posLoc);
     gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
 
-    // Dynamic resolution based on if we are exporting or viewing
     gl.uniform2f(locTargetRes, targetWidth, targetHeight);
     gl.uniform2f(locTileOffset, offsetX, offsetY);
 
@@ -579,7 +567,6 @@ function drawFrame(targetWidth, targetHeight, offsetX, offsetY, frameIndex, view
 
     gl.drawArrays(gl.TRIANGLES, 0, 6);
 
-    // Draw to Screen
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.useProgram(screenProgram);
     let screenPosLoc = gl.getAttribLocation(screenProgram, 'a_position');
@@ -601,7 +588,7 @@ let texWidth = canvas.width, texHeight = canvas.height;
 function render(time) {
     if (isExporting) {
         requestAnimationFrame(render);
-        return; // Pause the main loop completely during export
+        return; 
     }
 
     if (canvas.width !== texWidth || canvas.height !== texHeight) {
@@ -617,7 +604,6 @@ function render(time) {
         frameCount = 0; isDirty = false;
     }
 
-    // Standard Viewport Rendering uses identical Target & Canvas resolution with 0 offset
     drawFrame(canvas.width, canvas.height, 0, 0, frameCount, canvas.width, canvas.height);
     
     frameCount++;
