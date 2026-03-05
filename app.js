@@ -351,7 +351,7 @@ canvas.addEventListener('touchmove', (e) => {
             lastRollAngle = newAngle;
         } 
         else if (isLooking) {
-            let deltaX = e.touches[0].clientX - lastInput.x;
+            let deltaX = e.touches[0].clientX + lastInput.x;
             let deltaY = e.touches[0].clientY - lastInput.y;
             
             let qYaw = Quat.fromAxisAngle([0, 1, 0], -deltaX * 0.005);
