@@ -51,7 +51,6 @@ const fsSource = `#version 300 es
     uniform vec2 u_resolution;
     uniform float u_time;
     uniform vec3 u_ro; 
-    
     uniform vec3 u_camForward;
     uniform vec3 u_camRight;
     uniform vec3 u_camUp; 
@@ -67,18 +66,10 @@ const fsSource = `#version 300 es
         
         for (int i = 0; i < 30; i++) {
             if (i >= u_iterations) break; 
-            
             p = clamp(p, -1.0, 1.0) * 2.0 - p;
-            
             float r2 = dot(p, p);
-            if (r2 < 0.25) { 
-                p *= 4.0;
-                dr *= 4.0;
-            } else if (r2 < 1.0) { 
-                p /= r2;
-                dr /= r2;
-            }
-            
+            if (r2 < 0.25) { p *= 4.0; dr *= 4.0; } 
+            else if (r2 < 1.0) { p /= r2; dr /= r2; }
             p = p * u_scale + offset;
             dr = dr * abs(u_scale) + 1.0;
         }
@@ -86,50 +77,71 @@ const fsSource = `#version 300 es
     }
 
     vec3 getNormal(vec3 p, float t) {
-        // Epsilon scales with distance to reduce high-frequency normal noise
         float eps = max(0.0005, 0.001 * t); 
         vec2 e = vec2(eps, 0.0);
-        
-        vec3 n = map(p) - vec3(
-            map(p - e.xyy),
-            map(p - e.yxy),
-            map(p - e.yyx)
-        );
+        vec3 n = map(p) - vec3(map(p - e.xyy), map(p - e.yxy), map(p - e.yyx));
         return normalize(n);
     }
 
-    // NEW: We moved the raymarching loop into its own function so we can call it multiple times
+    // NEW: Ambient Occlusion
+    float calcAO(vec3 pos, vec3 nor) {
+        float occ = 0.0;
+        float sca = 1.0;
+        for(int i = 0; i < 5; i++) {
+            float h = 0.01 + 0.12 * float(i) / 4.0;
+            float d = map(pos + h * nor);
+            occ += (h - d) * sca;
+            sca *= 0.95;
+            if(occ > 0.35) break;
+        }
+        return clamp(1.0 - 3.0 * occ, 0.0, 1.0) * (0.5 + 0.5 * nor.y);
+    }
+
+    // NEW: Soft Shadows
+    float calcShadow(vec3 ro, vec3 rd) {
+        float res = 1.0;
+        float t = 0.05; // Start slightly away from the surface
+        for(int i = 0; i < 30; i++) {
+            float h = map(ro + rd * t);
+            res = min(res, 8.0 * h / t); // The '8.0' controls shadow softness
+            t += clamp(h, 0.02, 0.1);
+            if(h < 0.001 || t > 10.0) break;
+        }
+        return clamp(res, 0.0, 1.0);
+    }
+
     vec3 getSceneColor(vec3 ro, vec3 rd) {
         float t = 0.0;
         int max_steps = 250; 
         float max_dist = 100.0;
-        
-        // Background color
         vec3 bgCol = vec3(0.02, 0.02, 0.03);
         vec3 col = bgCol;
 
         for(int i = 0; i < max_steps; i++) {
             vec3 p = ro + rd * t;
             float d = map(p);
-            
             if(abs(d) < 0.001 * t || t > max_dist) break;
-            
             t += d * 0.8; 
         }
 
         if(t < max_dist) {
             vec3 p = ro + rd * t;       
             vec3 n = getNormal(p, t);      
-            
             vec3 lightDir = normalize(u_lightPos - p);
-            float dif = clamp(dot(n, lightDir), 0.0, 1.0);
-            float ambient = 0.15;
             
-            col = u_baseColor * (dif + ambient);
+            // Calculate lighting, shadows, and AO
+            float dif = clamp(dot(n, lightDir), 0.0, 1.0);
+            float shadow = calcShadow(p, lightDir);
+            float ao = calcAO(p, n);
+            float ambient = 0.15 * ao; // AO dims the ambient light in crevices
+            
+            // Apply shadow to the diffuse light
+            col = u_baseColor * (dif * shadow + ambient);
             
             float rim = 1.0 - clamp(dot(-rd, n), 0.0, 1.0);
             vec3 rimColor = mix(u_baseColor, vec3(1.0), 0.6); 
-            col += rimColor * pow(rim, 4.0) * 0.4;
+            // AO also prevents rim lights from glowing inside deep holes
+            col += rimColor * pow(rim, 4.0) * 0.4 * ao; 
         }
 
         col = mix(col, bgCol, 1.0 - exp(-0.03 * t));
@@ -137,27 +149,13 @@ const fsSource = `#version 300 es
     }
 
     void main() {
-        vec3 totalColor = vec3(0.0);
+        // Temporarily reverted to 1 sample per pixel to restore performance
+        vec2 uv = (gl_FragCoord.xy * 2.0 - u_resolution.xy) / u_resolution.y;
+        vec3 rd = normalize(uv.x * u_camRight + uv.y * u_camUp + 1.0 * u_camForward); 
         
-        // NEW: 2x2 Sub-pixel Anti-Aliasing Loop
-        for(int m = 0; m < 2; m++) {
-            for(int n = 0; n < 2; n++) {
-                // Calculate sub-pixel offset
-                vec2 offset = vec2(float(m), float(n)) / 2.0 - 0.25;
-                
-                // Apply offset to fragment coordinates
-                vec2 uv = (gl_FragCoord.xy + offset * 2.0 - u_resolution.xy) / u_resolution.y;
-                vec3 rd = normalize(uv.x * u_camRight + uv.y * u_camUp + 1.0 * u_camForward); 
-                
-                totalColor += getSceneColor(u_ro, rd);
-            }
-        }
-        
-        // Average the 4 samples
-        totalColor /= 4.0;
-
-        totalColor = pow(totalColor, vec3(1.0/2.2)); // Gamma correction
-        outColor = vec4(totalColor, 1.0);
+        vec3 col = getSceneColor(u_ro, rd);
+        col = pow(col, vec3(1.0/2.2)); 
+        outColor = vec4(col, 1.0);
     }
 `;
 
