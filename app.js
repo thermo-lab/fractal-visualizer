@@ -215,7 +215,7 @@ canvas.addEventListener('mousemove', (e) => {
 
     if (isLooking) {
         tYaw -= deltaX * 0.005; // Drag left/right to turn head
-        tPitch -= deltaY * 0.005; // Drag up/down to look up/down
+        tPitch += deltaY * 0.005; // Drag up/down to look up/down
         tPitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, tPitch));
     }
 
