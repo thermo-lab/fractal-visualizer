@@ -183,161 +183,129 @@ gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
 const resolutionLocation = gl.getUniformLocation(program, 'u_resolution');
 const timeLocation = gl.getUniformLocation(program, 'u_time');
 
-// --- Smooth Camera Controls ---
-let isOrbiting = false;
+// --- First-Person Camera Controls (Mouse & Touch) ---
+let isLooking = false;
 let isPanning = false;
-let lastMouse = { x: 0, y: 0 };
-
-// Target values (driven instantly by mouse input)
-let tAngleX = 0.0;
-let tAngleY = 0.0;
-let tZoom = 2.5;
-let tTarget = { x: 0.0, y: 0.0, z: 0.0 };
-
-// Current values (eased toward target values every frame)
-let cAngleX = 0.0;
-let cAngleY = 0.0;
-let cZoom = 2.5;
-let cTarget = { x: 0.0, y: 0.0, z: 0.0 };
-
-// Prevent the browser right-click menu from appearing
-canvas.addEventListener('contextmenu', e => e.preventDefault());
-
-canvas.addEventListener('mousedown', (e) => {
-    if (e.button === 0) isOrbiting = true;
-    if (e.button === 2) isPanning = true; // Right-click to pan
-    lastMouse = { x: e.offsetX, y: e.offsetY };
-});
-
-canvas.addEventListener('mousemove', (e) => {
-    let deltaX = e.offsetX - lastMouse.x;
-    let deltaY = e.offsetY - lastMouse.y;
-
-    if (isOrbiting) {
-        tAngleX -= deltaX * 0.01;
-        tAngleY += deltaY * 0.01;
-        tAngleY = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, tAngleY));
-    }
-
-    if (isPanning) {
-        // Calculate the camera's local X and Z heading so panning feels intuitive
-        // regardless of which way you have orbited.
-        let rightX = Math.cos(cAngleX);
-        let rightZ = -Math.sin(cAngleX);
-
-        let panSpeed = 0.002 * cZoom; // Pan speed scales based on how far zoomed out you are
-        tTarget.x -= rightX * deltaX * panSpeed;
-        tTarget.z -= rightZ * deltaX * panSpeed;
-        tTarget.y += deltaY * panSpeed;
-    }
-
-    lastMouse = { x: e.offsetX, y: e.offsetY };
-});
-
-// Bind mouseup to window so we don't get stuck dragging if the cursor leaves the canvas
-window.addEventListener('mouseup', () => { isOrbiting = false; isPanning = false; });
-
-// Update the wheel event to use a smaller multiplier (0.0005 instead of 0.002)
-canvas.addEventListener('wheel', (e) => {
-    e.preventDefault();
-    tZoom += e.deltaY * 0.0005 * tZoom;
-    tZoom = Math.max(0.1, Math.min(20.0, tZoom));
-}, { passive: false });
-
-// --- Touch Controls ---
-let lastTouch = { x: 0, y: 0 };
+let lastInput = { x: 0, y: 0 };
 let lastTouchDistance = 0;
 let lastTouchCenter = { x: 0, y: 0 };
 
-// Helper function to calculate distance between two fingers (for zooming)
-function getTouchDistance(touches) {
-    const dx = touches[0].clientX - touches[1].clientX;
-    const dy = touches[0].clientY - touches[1].clientY;
-    return Math.hypot(dx, dy);
-}
+// Target values (driven instantly by user input)
+let tYaw = 0.0;
+let tPitch = 0.0;
+let tPos = { x: 0.0, y: 0.0, z: 4.0 }; // Start pulled back slightly
 
-// Helper function to calculate the center point between two fingers (for panning)
-function getTouchCenter(touches) {
-    return {
-        x: (touches[0].clientX + touches[1].clientX) / 2,
-        y: (touches[0].clientY + touches[1].clientY) / 2
-    };
-}
+// Current values (eased toward target values every frame)
+let cYaw = 0.0;
+let cPitch = 0.0;
+let cPos = { x: 0.0, y: 0.0, z: 4.0 };
 
-canvas.addEventListener('touchstart', (e) => {
-    e.preventDefault(); // Prevents the whole browser page from pulling/scrolling
+canvas.addEventListener('contextmenu', e => e.preventDefault());
 
-    if (e.touches.length === 1) {
-        isOrbiting = true;
-        lastTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-    } else if (e.touches.length === 2) {
-        isOrbiting = false;
-        isPanning = true;
-        lastTouchDistance = getTouchDistance(e.touches);
-        lastTouchCenter = getTouchCenter(e.touches);
+// --- MOUSE EVENTS ---
+canvas.addEventListener('mousedown', (e) => {
+    if (e.button === 0) isLooking = true; // Left click: Turn head
+    if (e.button === 2) isPanning = true; // Right click: Move body up/down/left/right
+    lastInput = { x: e.offsetX, y: e.offsetY };
+});
+
+canvas.addEventListener('mousemove', (e) => {
+    let deltaX = e.offsetX - lastInput.x;
+    let deltaY = e.offsetY - lastInput.y;
+
+    if (isLooking) {
+        tYaw -= deltaX * 0.005; // Drag left/right to turn head
+        tPitch -= deltaY * 0.005; // Drag up/down to look up/down
+        tPitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, tPitch));
     }
-}, { passive: false }); // passive: false is required to allow e.preventDefault()
+
+    if (isPanning) handlePan(deltaX, deltaY);
+
+    lastInput = { x: e.offsetX, y: e.offsetY };
+});
+
+window.addEventListener('mouseup', () => { isLooking = false; isPanning = false; }); 
+
+canvas.addEventListener('wheel', (e) => {
+    e.preventDefault(); 
+    handleForwardMovement(-e.deltaY * 0.005); // Scroll to walk forward/backward
+}, { passive: false });
+
+
+// --- TOUCH EVENTS ---
+canvas.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    if (e.touches.length === 1) {
+        isLooking = true;
+        lastInput = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    } else if (e.touches.length === 2) {
+        isLooking = false;
+        isPanning = true;
+        lastTouchDistance = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+        lastTouchCenter = { x: (e.touches[0].clientX + e.touches[1].clientX) / 2, y: (e.touches[0].clientY + e.touches[1].clientY) / 2 };
+    }
+}, { passive: false });
 
 canvas.addEventListener('touchmove', (e) => {
     e.preventDefault();
-
-    // 1-Finger Orbit
-    if (e.touches.length === 1 && isOrbiting) {
-        let deltaX = e.touches[0].clientX - lastTouch.x;
-        let deltaY = e.touches[0].clientY - lastTouch.y;
-
-        tAngleX -= deltaX * 0.01;
-        tAngleY += deltaY * 0.01;
-        tAngleY = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, tAngleY));
-
-        lastTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-    }
-    // 2-Finger Pan and Zoom
+    if (e.touches.length === 1 && isLooking) {
+        let deltaX = e.touches[0].clientX - lastInput.x;
+        let deltaY = e.touches[0].clientY - lastInput.y;
+        
+        tYaw -= deltaX * 0.005;
+        tPitch -= deltaY * 0.005;
+        tPitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, tPitch));
+        lastInput = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    } 
     else if (e.touches.length === 2 && isPanning) {
-        // Handle Zoom (Pinch)
-        const currentDistance = getTouchDistance(e.touches);
-        const zoomDelta = lastTouchDistance - currentDistance;
-
-        // Touch zooming needs a slightly higher multiplier than the mouse wheel
-        tZoom += zoomDelta * 0.005 * tZoom;
-        tZoom = Math.max(0.1, Math.min(20.0, tZoom));
+        const currentDistance = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+        const currentCenter = { x: (e.touches[0].clientX + e.touches[1].clientX) / 2, y: (e.touches[0].clientY + e.touches[1].clientY) / 2 };
+        
+        handleForwardMovement((currentDistance - lastTouchDistance) * 0.01); // Pinch to walk
+        handlePan(currentCenter.x - lastTouchCenter.x, currentCenter.y - lastTouchCenter.y); // Two-finger drag to strafe
+        
         lastTouchDistance = currentDistance;
-
-        // Handle Pan (Two-finger drag)
-        const currentCenter = getTouchCenter(e.touches);
-        const deltaX = currentCenter.x - lastTouchCenter.x;
-        const deltaY = currentCenter.y - lastTouchCenter.y;
-
-        let rightX = Math.cos(cAngleX);
-        let rightZ = -Math.sin(cAngleX);
-
-        let panSpeed = 0.002 * cZoom;
-        tTarget.x -= rightX * deltaX * panSpeed;
-        tTarget.z -= rightZ * deltaX * panSpeed;
-        tTarget.y += deltaY * panSpeed;
-
         lastTouchCenter = currentCenter;
     }
 }, { passive: false });
 
 canvas.addEventListener('touchend', (e) => {
     e.preventDefault();
-
     if (e.touches.length < 2) isPanning = false;
-    if (e.touches.length === 0) isOrbiting = false;
-
-    // If you lift one finger but keep the other down, seamlessly switch back to orbiting
+    if (e.touches.length === 0) isLooking = false;
     if (e.touches.length === 1) {
-        lastTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-        isOrbiting = true;
+        lastInput = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        isLooking = true;
     }
 });
+canvas.addEventListener('touchcancel', () => { isLooking = false; isPanning = false; });
 
-// Failsafe in case a system notification interrupts the touch
-canvas.addEventListener('touchcancel', () => {
-    isOrbiting = false;
-    isPanning = false;
-});
+
+// --- MOVEMENT HELPERS ---
+function handlePan(deltaX, deltaY) {
+    // Calculate Right and Up vectors relative to where we are currently looking
+    let rightX = Math.cos(tYaw);
+    let rightZ = Math.sin(tYaw);
+    let upX = -Math.sin(tYaw) * Math.sin(tPitch);
+    let upY = Math.cos(tPitch);
+    let upZ = Math.cos(tYaw) * Math.sin(tPitch);
+
+    let panSpeed = 0.005;
+    tPos.x -= rightX * deltaX * panSpeed - upX * deltaY * panSpeed;
+    tPos.y -= -upY * deltaY * panSpeed;
+    tPos.z -= rightZ * deltaX * panSpeed - upZ * deltaY * panSpeed;
+}
+
+function handleForwardMovement(amount) {
+    // Calculate Forward vector
+    let fwdX = Math.sin(tYaw) * Math.cos(tPitch);
+    let fwdY = Math.sin(tPitch);
+    let fwdZ = -Math.cos(tYaw) * Math.cos(tPitch);
+
+    tPos.x += fwdX * amount;
+    tPos.y += fwdY * amount;
+    tPos.z += fwdZ * amount;
+}
 
 // Add this near your other location grabs
 const roLocation = gl.getUniformLocation(program, 'u_ro');
@@ -354,25 +322,26 @@ function render(time) {
     gl.uniform2f(resolutionLocation, canvas.width, canvas.height);
     gl.uniform1f(timeLocation, time);
 
-    // 1. Lerp all camera parameters for buttery smoothness
-    let lerpSpeed = 0.1;       // Fast response for panning/orbiting
-    let zoomLerpSpeed = 0.04;  // Slower, silky response for zooming
+    // 1. Smoothly interpolate current values toward target values
+    let lerpSpeed = 0.1;
+    cYaw += (tYaw - cYaw) * lerpSpeed;
+    cPitch += (tPitch - cPitch) * lerpSpeed;
+    cPos.x += (tPos.x - cPos.x) * lerpSpeed;
+    cPos.y += (tPos.y - cPos.y) * lerpSpeed;
+    cPos.z += (tPos.z - cPos.z) * lerpSpeed;
 
-    cAngleX += (tAngleX - cAngleX) * lerpSpeed;
-    cAngleY += (tAngleY - cAngleY) * lerpSpeed;
-    cZoom += (tZoom - cZoom) * zoomLerpSpeed; // Use the new smooth speed here
-    cTarget.x += (tTarget.x - cTarget.x) * lerpSpeed;
-    cTarget.y += (tTarget.y - cTarget.y) * lerpSpeed;
-    cTarget.z += (tTarget.z - cTarget.z) * lerpSpeed;
+    // 2. Calculate the "Look Target" by projecting a point in front of the camera
+    let fwdX = Math.sin(cYaw) * Math.cos(cPitch);
+    let fwdY = Math.sin(cPitch);
+    let fwdZ = -Math.cos(cYaw) * Math.cos(cPitch);
 
-    // 2. Calculate the camera position relative to our movable target
-    let roX = cTarget.x + cZoom * Math.cos(cAngleY) * Math.sin(cAngleX);
-    let roY = cTarget.y + cZoom * Math.sin(cAngleY);
-    let roZ = cTarget.z + cZoom * Math.cos(cAngleY) * Math.cos(cAngleX);
+    let targetX = cPos.x + fwdX;
+    let targetY = cPos.y + fwdY;
+    let targetZ = cPos.z + fwdZ;
 
-    // 3. Send the updated position and target to the GPU
-    gl.uniform3f(roLocation, roX, roY, roZ);
-    gl.uniform3f(taLocation, cTarget.x, cTarget.y, cTarget.z);
+    // 3. Send the position and projected target to the GPU
+    gl.uniform3f(roLocation, cPos.x, cPos.y, cPos.z);
+    gl.uniform3f(taLocation, targetX, targetY, targetZ);
 
     // Send the math params
     gl.uniform1f(scaleLocation, params.scale);
