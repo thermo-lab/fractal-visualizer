@@ -674,9 +674,6 @@ function drawExportFrame(targetWidth, targetHeight, offsetX, offsetY, frameIndex
 // --- Main Render Loop (Viewport Preview) ---
 let texWidth = canvas.width, texHeight = canvas.height;
 
-// --- Main Render Loop (Viewport Preview) ---
-let texWidth = canvas.width, texHeight = canvas.height;
-
 function render(time) {
     if (isExporting) {
         requestAnimationFrame(render);
