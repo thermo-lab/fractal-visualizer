@@ -182,11 +182,16 @@ async function exportHighResImage() {
                 const curW = Math.min(tileSize, totalW - x * tileSize);
                 const curH = Math.min(tileSize, totalH - y * tileSize);
 
+                // EXPLICIT WIPE: Prevents NaN corruption and bleed between tiles
+                gl.bindFramebuffer(gl.FRAMEBUFFER, exp.fA); gl.clearColor(0,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT);
+                gl.bindFramebuffer(gl.FRAMEBUFFER, exp.fB); gl.clearColor(0,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT);
+                gl.bindFramebuffer(gl.FRAMEBUFFER, exp.fFinal); gl.clearColor(0,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT);
+
                 let readTex = exp.tB;
                 let writeFbo = exp.fA;
 
                 for (let s = 0; s < params.exportSamples; s++) {
-                    drawExportFrame(totalW, totalH, x * tileSize, y * tileSize, s, tileSize, tileSize, writeFbo, readTex);
+                    drawExportFrame(totalW, totalH, x * tileSize, y * tileSize, s, writeFbo, readTex);
 
                     let tempT = readTex; readTex = writeFbo === exp.fA ? exp.tA : exp.tB;
                     writeFbo = writeFbo === exp.fA ? exp.fB : exp.fA;
@@ -211,10 +216,17 @@ async function exportHighResImage() {
                 gl.readPixels(0, 0, curW, curH, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
 
                 const imageData = ctx.createImageData(curW, curH);
+
+                // FORCED ALPHA: Manually map pixels to Canvas and lock Alpha to 255
                 for (let i = 0; i < curH; i++) {
-                    const srcOffset = (curH - 1 - i) * curW * 4;
-                    const dstOffset = i * curW * 4;
-                    imageData.data.set(pixels.subarray(srcOffset, srcOffset + curW * 4), dstOffset);
+                    for (let j = 0; j < curW; j++) {
+                        const srcIdx = ((curH - 1 - i) * curW + j) * 4;
+                        const dstIdx = (i * curW + j) * 4;
+                        imageData.data[dstIdx] = pixels[srcIdx];
+                        imageData.data[dstIdx+1] = pixels[srcIdx+1];
+                        imageData.data[dstIdx+2] = pixels[srcIdx+2];
+                        imageData.data[dstIdx+3] = 255;
+                    }
                 }
 
                 ctx.putImageData(imageData, x * tileSize, totalH - (y * tileSize) - curH);
@@ -402,10 +414,7 @@ const fsAccum = `#version 300 es
 
     void main() {
         vec2 globalCoord = gl_FragCoord.xy + u_tileOffset;
-        
-        // FIXED: The missing * 2.0 that corrects the projection centering and aligns the tiles!
         vec2 uv = ((globalCoord + u_jitter) * 2.0 - u_targetResolution.xy) / u_targetResolution.y;
-        
         vec3 rd = normalize(uv.x * u_camRight + uv.y * u_camUp + 1.0 * u_camForward); 
         
         vec3 col = getSceneColor(u_ro, rd);
@@ -433,9 +442,11 @@ const fsScreen = `#version 300 es
     out vec4 outColor;
     uniform sampler2D u_texture;
     void main() {
-        // FIXED: Direct gl_FragCoord pixel fetching stops the tiles from bleeding at the edges
         vec2 uv = gl_FragCoord.xy / vec2(textureSize(u_texture, 0));
         vec3 col = texture(u_texture, uv).rgb;
+        
+        // SAFETY CLAMP: Prevent NaNs from slipping into the pow function
+        col = max(col, 0.0);
         col = pow(col, vec3(1.0/2.2)); 
         outColor = vec4(col, 1.0);
     }
@@ -529,7 +540,6 @@ canvas.addEventListener('contextmenu', e => e.preventDefault());
 canvas.addEventListener('mousedown', (e) => {
     if (e.button === 0) {
         let borderSize = Math.min(canvas.width, canvas.height) * 0.18;
-        // FIXED: Using clientX/Y perfectly aligns the mouse interactions to the window box model
         let isEdgeX = e.clientX < borderSize || e.clientX > canvas.width - borderSize;
         let isEdgeY = e.clientY < borderSize || e.clientY > canvas.height - borderSize;
         if (isEdgeX || isEdgeY) { isRolling = true; lastRollAngle = Math.atan2(e.clientY - canvas.height / 2, e.clientX - canvas.width / 2); }
@@ -611,7 +621,7 @@ function handleForwardMovement(amount) {
 }
 
 // --- Dedicated Tile Renderer ---
-function drawExportFrame(targetWidth, targetHeight, offsetX, offsetY, frameIndex, viewW, viewH, fboWrite, texRead) {
+function drawExportFrame(targetWidth, targetHeight, offsetX, offsetY, frameIndex, fboWrite, texRead) {
     let fwd = Quat.rotateVec3(cRot, [0, 0, -1]);
     let right = Quat.rotateVec3(cRot, [1, 0, 0]);
     let up = Quat.rotateVec3(cRot, [0, 1, 0]);
@@ -640,8 +650,10 @@ function drawExportFrame(targetWidth, targetHeight, offsetX, offsetY, frameIndex
     gl.uniform3f(locLight, params.lightX, params.lightY, params.lightZ);
 
     gl.uniform1f(locFrame, frameIndex);
-    let jx = frameIndex === 0 ? 0 : (Math.random() - 0.5);
-    let jy = frameIndex === 0 ? 0 : (Math.random() - 0.5);
+
+    // DETERMINISTIC JITTER: Identical blur boundaries across all tiles
+    let jx = frameIndex === 0 ? 0 : ((Math.sin(frameIndex * 12.9898) * 43758.5453) % 1.0) - 0.5;
+    let jy = frameIndex === 0 ? 0 : ((Math.sin(frameIndex * 78.2330) * 43758.5453) % 1.0) - 0.5;
     gl.uniform2f(locJitter, jx, jy);
 
     gl.activeTexture(gl.TEXTURE0);
@@ -674,7 +686,46 @@ function render(time) {
     }
 
     gl.viewport(0, 0, canvas.width, canvas.height);
-    drawExportFrame(canvas.width, canvas.height, 0, 0, frameCount, canvas.width, canvas.height, fboA, texB);
+
+    // Viewport preview jitter
+    let jx = frameCount === 0 ? 0 : ((Math.sin(frameCount * 12.9898) * 43758.5453) % 1.0) - 0.5;
+    let jy = frameCount === 0 ? 0 : ((Math.sin(frameCount * 78.2330) * 43758.5453) % 1.0) - 0.5;
+
+    let fwd = Quat.rotateVec3(cRot, [0, 0, -1]);
+    let right = Quat.rotateVec3(cRot, [1, 0, 0]);
+    let up = Quat.rotateVec3(cRot, [0, 1, 0]);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fboA);
+    gl.useProgram(accumProgram);
+
+    let posLoc = gl.getAttribLocation(accumProgram, 'a_position');
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    gl.enableVertexAttribArray(posLoc);
+    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+
+    gl.uniform2f(locTargetRes, canvas.width, canvas.height);
+    gl.uniform2f(locTileOffset, 0, 0);
+
+    gl.uniform3f(locRo, cPos.x, cPos.y, cPos.z);
+    gl.uniform3f(locFwd, fwd.x, fwd.y, fwd.z);
+    gl.uniform3f(locRight, right.x, right.y, right.z);
+    gl.uniform3f(locUp, up.x, up.y, up.z);
+
+    gl.uniform1f(locScale, params.scale);
+    gl.uniform1i(locIter, params.iterations);
+    gl.uniform3f(locBase, params.baseColor[0], params.baseColor[1], params.baseColor[2]);
+    gl.uniform3f(locBg, params.bgColor[0], params.bgColor[1], params.bgColor[2]);
+    gl.uniform1f(locBright, params.brightness);
+    gl.uniform3f(locLight, params.lightX, params.lightY, params.lightZ);
+
+    gl.uniform1f(locFrame, frameCount);
+    gl.uniform2f(locJitter, jx, jy);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texB);
+    gl.uniform1i(locPrev, 0);
+
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.useProgram(screenProgram);
