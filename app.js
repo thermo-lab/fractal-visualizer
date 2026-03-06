@@ -475,8 +475,16 @@ const fsAccum = `#version 300 es
         return clamp(res, 0.0, 1.0);
     }
 
+    // Pseudo-random noise generator for dithering
+    float random(vec2 st) {
+        return fract(sin(dot(st.xy, vec2(12.9898, 78.233))) * 43758.5453123);
+    }
+
     vec3 getSceneColor(vec3 ro, vec3 rd) {
-        float t = 0.0;
+        // Dither the ray's starting position using the pixel coordinate and the current frame
+        float dither = random(gl_FragCoord.xy + u_frame * 13.0);
+        float t = dither * 0.05; 
+        
         int max_steps = 400; 
         float max_dist = 100.0;
         vec3 bgCol = u_bgColor;
@@ -546,6 +554,11 @@ const fsScreen = `#version 300 es
         
         col = max(col, 0.0);
         col = pow(col, vec3(1.0/2.2)); 
+        
+        // Add microscopic screen-space noise to break up 8-bit color quantization banding
+        float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+        col += (n - 0.5) / 255.0;
+
         outColor = vec4(col, 1.0);
     }
 `;
@@ -659,7 +672,6 @@ canvas.addEventListener('mousedown', (e) => {
 canvas.addEventListener('mousemove', (e) => {
     let deltaX = e.clientX - lastInput.x; let deltaY = e.clientY - lastInput.y;
 
-    // FIXED: Use a quadratic curve for speed to prevent microscopic freezing
     let speedMult = Math.pow(params.moveSpeed, 2);
     if (e.shiftKey) speedMult *= 0.1;
 
@@ -670,7 +682,6 @@ canvas.addEventListener('mousemove', (e) => {
         tRot = Quat.normalize(Quat.multiply(tRot, Quat.fromAxisAngle([0, 0, 1], dAngle)));
         lastRollAngle = newAngle;
     } else if (isLooking) {
-        // FIXED: Removed speed multiplier from rotation so your head always turns normally
         let qTurn = Quat.multiply(
             Quat.fromAxisAngle([0, 1, 0], -deltaX * 0.005),
             Quat.fromAxisAngle([1, 0, 0], -deltaY * 0.005)
@@ -824,7 +835,6 @@ function render(time) {
     cPos.z += (tPos.z - cPos.z) * 0.1;
     cRot = Quat.slerp(cRot, tRot, 0.1);
 
-    // FIXED: Pushed the snap threshold down to 1-millionth of a unit
     if (Math.abs(tPos.x - cPos.x) < 0.000001) cPos.x = tPos.x;
     if (Math.abs(tPos.y - cPos.y) < 0.000001) cPos.y = tPos.y;
     if (Math.abs(tPos.z - cPos.z) < 0.000001) cPos.z = tPos.z;
