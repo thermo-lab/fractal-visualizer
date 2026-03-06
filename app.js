@@ -64,6 +64,12 @@ const params = {
     lightX: 2.0,
     lightY: 3.0,
     lightZ: -2.0,
+
+    ambientLight: 0.15,
+    rimStrength: 0.4,
+    rimWhiteness: 0.6,
+    fogDensity: 0.03,
+
     previewSamples: 60,
     showCrop: false,
     exportWidth: 7200,
@@ -332,6 +338,13 @@ const visualFolder = gui.addFolder('Lighting & Environment');
 visualFolder.add(params, 'surfaceDetail', 0.00001, 0.005, 0.00001).name('Surface Detail');
 visualFolder.addColor(params, 'bgColor').name('Background / Fog');
 visualFolder.add(params, 'brightness', 0.1, 5.0, 0.1).name('Brightness');
+
+const matFolder = visualFolder.addFolder('Material Properties');
+matFolder.add(params, 'ambientLight', 0.0, 1.0, 0.01).name('Ambient Light');
+matFolder.add(params, 'rimStrength', 0.0, 2.0, 0.01).name('Rim Light Strength');
+matFolder.add(params, 'rimWhiteness', 0.0, 1.0, 0.01).name('Rim Whiteness');
+matFolder.add(params, 'fogDensity', 0.0, 0.1, 0.001).name('Fog Density');
+
 visualFolder.add(params, 'lightX', -10.0, 10.0).name('Light X');
 visualFolder.add(params, 'lightY', -10.0, 10.0).name('Light Y');
 visualFolder.add(params, 'lightZ', -10.0, 10.0).name('Light Z');
@@ -382,6 +395,11 @@ const fsAccum = `#version 300 es
     uniform vec3 u_bgColor;
     uniform float u_brightness;
     uniform vec3 u_lightPos;
+    
+    uniform float u_ambientLight;
+    uniform float u_rimStrength;
+    uniform float u_rimWhiteness;
+    uniform float u_fogDensity;
 
     uniform sampler2D u_prevFrame;
     uniform float u_frame;
@@ -392,53 +410,41 @@ const fsAccum = `#version 300 es
         float trap = 0.0;
 
         if (u_fractalType == 0) {
-            // Mandelbox
             vec3 offset = p;
             for (int i = 0; i < 30; i++) {
                 if (i >= u_iterations) break; 
                 vec3 prevP = p; 
-                
                 p = clamp(p, -1.0, 1.0) * 2.0 - p;
                 float r2 = dot(p, p);
                 if (r2 < 0.25) { p *= 4.0; dr *= 4.0; } 
                 else if (r2 < 1.0) { p /= r2; dr /= r2; }
-                
                 p = p * u_scale + offset;
                 dr = dr * abs(u_scale) + 1.0;
                 trap += min(length(p - prevP), 10.0); 
             }
             return vec2(length(p) / abs(dr), trap / float(u_iterations));
-            
         } else if (u_fractalType == 1) {
-            // Sierpinski Tetrahedron
             for (int i = 0; i < 30; i++) {
                 if (i >= u_iterations) break;
                 vec3 prevP = p;
-                
                 if(p.x + p.y < 0.0) p.xy = -p.yx;
                 if(p.x + p.z < 0.0) p.xz = -p.zx;
                 if(p.y + p.z < 0.0) p.yz = -p.zy;
-                
                 p = p * u_scale - vec3(1.0) * (u_scale - 1.0);
                 dr *= abs(u_scale);
                 trap += min(length(p - prevP), 10.0);
             }
             return vec2((length(p) - 1.0) / abs(dr), trap / float(u_iterations));
-            
         } else {
-            // Menger Sponge
             for (int i = 0; i < 30; i++) {
                 if (i >= u_iterations) break;
                 vec3 prevP = p;
-                
                 p = abs(p);
                 if (p.x < p.y) p.xy = p.yx;
                 if (p.x < p.z) p.xz = p.zx;
                 if (p.y < p.z) p.yz = p.zy;
-                
                 p = p * u_scale - vec3(1.0) * (u_scale - 1.0);
                 if (p.z < -0.5 * (u_scale - 1.0)) p.z += u_scale - 1.0;
-                
                 dr *= abs(u_scale);
                 trap += min(length(p - prevP), 10.0);
             }
@@ -475,13 +481,11 @@ const fsAccum = `#version 300 es
         return clamp(res, 0.0, 1.0);
     }
 
-    // Pseudo-random noise generator for dithering
     float random(vec2 st) {
         return fract(sin(dot(st.xy, vec2(12.9898, 78.233))) * 43758.5453123);
     }
 
     vec3 getSceneColor(vec3 ro, vec3 rd) {
-        // Dither the ray's starting position using the pixel coordinate and the current frame
         float dither = random(gl_FragCoord.xy + u_frame * 13.0);
         float t = dither * 0.05; 
         
@@ -494,7 +498,6 @@ const fsAccum = `#version 300 es
             vec3 p = ro + rd * t;
             float d = map(p).x;
             if(abs(d) < u_surfaceDetail * t || t > max_dist) break;
-            
             t += d * (u_fractalType == 0 ? 0.8 : 0.5); 
         }
 
@@ -510,13 +513,13 @@ const fsAccum = `#version 300 es
             float shadow = calcShadow(p, lightDir);
             float ao = calcAO(p, n);
             
-            col = baseCol * (dif * shadow + 0.15 * ao);
+            col = baseCol * (dif * shadow + u_ambientLight * ao);
             
             float rim = 1.0 - clamp(dot(-rd, n), 0.0, 1.0);
-            vec3 rimColor = mix(baseCol, vec3(1.0), 0.6); 
-            col += rimColor * pow(rim, 4.0) * 0.4 * ao; 
+            vec3 rimColor = mix(baseCol, vec3(1.0), u_rimWhiteness); 
+            col += rimColor * pow(rim, 4.0) * u_rimStrength * ao; 
         }
-        return mix(col, bgCol, 1.0 - exp(-0.03 * t));
+        return mix(col, bgCol, 1.0 - exp(-u_fogDensity * t));
     }
 
     void main() {
@@ -555,7 +558,6 @@ const fsScreen = `#version 300 es
         col = max(col, 0.0);
         col = pow(col, vec3(1.0/2.2)); 
         
-        // Add microscopic screen-space noise to break up 8-bit color quantization banding
         float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
         col += (n - 0.5) / 255.0;
 
@@ -635,6 +637,11 @@ const locBg = gl.getUniformLocation(accumProgram, 'u_bgColor');
 const locBright = gl.getUniformLocation(accumProgram, 'u_brightness');
 const locLight = gl.getUniformLocation(accumProgram, 'u_lightPos');
 
+const locAmbientLight = gl.getUniformLocation(accumProgram, 'u_ambientLight');
+const locRimStrength = gl.getUniformLocation(accumProgram, 'u_rimStrength');
+const locRimWhiteness = gl.getUniformLocation(accumProgram, 'u_rimWhiteness');
+const locFogDensity = gl.getUniformLocation(accumProgram, 'u_fogDensity');
+
 
 // --- Quaternion Math ---
 const Quat = {
@@ -671,7 +678,6 @@ canvas.addEventListener('mousedown', (e) => {
 });
 canvas.addEventListener('mousemove', (e) => {
     let deltaX = e.clientX - lastInput.x; let deltaY = e.clientY - lastInput.y;
-
     let speedMult = Math.pow(params.moveSpeed, 2);
     if (e.shiftKey) speedMult *= 0.1;
 
@@ -802,6 +808,11 @@ function drawExportFrame(targetWidth, targetHeight, offsetX, offsetY, frameIndex
     gl.uniform1f(locBright, params.brightness);
     gl.uniform3f(locLight, params.lightX, params.lightY, params.lightZ);
 
+    gl.uniform1f(locAmbientLight, params.ambientLight);
+    gl.uniform1f(locRimStrength, params.rimStrength);
+    gl.uniform1f(locRimWhiteness, params.rimWhiteness);
+    gl.uniform1f(locFogDensity, params.fogDensity);
+
     gl.uniform1f(locFrame, frameIndex);
 
     let jx = frameIndex === 0 ? 0 : hash(frameIndex * 12.9898) - 0.5;
@@ -891,6 +902,11 @@ function render(time) {
         gl.uniform3f(locBg, params.bgColor[0], params.bgColor[1], params.bgColor[2]);
         gl.uniform1f(locBright, params.brightness);
         gl.uniform3f(locLight, params.lightX, params.lightY, params.lightZ);
+
+        gl.uniform1f(locAmbientLight, params.ambientLight);
+        gl.uniform1f(locRimStrength, params.rimStrength);
+        gl.uniform1f(locRimWhiteness, params.rimWhiteness);
+        gl.uniform1f(locFogDensity, params.fogDensity);
 
         gl.uniform1f(locFrame, frameCount);
         gl.uniform2f(locJitter, jx, jy);
