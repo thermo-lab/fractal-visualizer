@@ -1,19 +1,19 @@
 import GUI from 'https://cdn.jsdelivr.net/npm/lil-gui@0.19/+esm';
 
 const canvas = document.getElementById('glcanvas');
-const gl = canvas.getContext('webgl2', { preserveDrawingBuffer: true });
+const gl = canvas.getContext('webgl2', { preserveDrawingBuffer: true }); 
 
 if (!gl) alert('WebGL2 is not supported by your browser.');
 
 // --- State Variables ---
 let isDirty = true;
 let frameCount = 0;
-let isExporting = false;
+let isExporting = false; 
 
-let tRot = { w: 1, x: 0, y: 0, z: 0 };
-let tPos = { x: 0.0, y: 0.0, z: 4.0 };
-let cRot = { w: 1, x: 0, y: 0, z: 0 };
-let cPos = { x: 0.0, y: 0.0, z: 4.0 };
+let tRot = { w: 1, x: 0, y: 0, z: 0 }; 
+let tPos = { x: 0.0, y: 0.0, z: 4.0 }; 
+let cRot = { w: 1, x: 0, y: 0, z: 0 }; 
+let cPos = { x: 0.0, y: 0.0, z: 4.0 }; 
 
 let isLooking = false, isPanning = false, isRolling = false;
 let lastRollAngle = 0, lastInput = { x: 0, y: 0 };
@@ -46,25 +46,26 @@ document.body.appendChild(exportOverlay);
 
 // --- UI Parameters ---
 const params = {
+    fractalType: 0, // 0 = Mandelbox, 1 = Sierpinski, 2 = Menger
     scale: 2.0,
     iterations: 12,
-
-    palA: [0.5, 0.5, 0.5],
-    palB: [0.5, 0.5, 0.5],
-    palC: [1.0, 1.0, 1.0],
-    palD: [0.00, 0.33, 0.67],
-    colorBlend: 1.5,
-
-    bgColor: [0.02, 0.02, 0.03],
+    
+    palA: [0.5, 0.5, 0.5],     
+    palB: [0.5, 0.5, 0.5],     
+    palC: [1.0, 1.0, 1.0],     
+    palD: [0.00, 0.33, 0.67],  
+    colorBlend: 1.5,           
+    
+    bgColor: [0.02, 0.02, 0.03], 
     brightness: 1.2,
     lightX: 2.0,
     lightY: 3.0,
     lightZ: -2.0,
     previewSamples: 60,
     showCrop: false,
-    exportWidth: 7200,
+    exportWidth: 7200, 
     exportHeight: 10800,
-    exportSamples: 60
+    exportSamples: 60  
 };
 
 function updateCropGuide() {
@@ -73,10 +74,10 @@ function updateCropGuide() {
         return;
     }
     cropGuide.style.display = 'block';
-
+    
     const targetAspect = params.exportWidth / params.exportHeight;
     const windowAspect = window.innerWidth / window.innerHeight;
-
+    
     let w, h;
     if (windowAspect > targetAspect) {
         h = window.innerHeight * 0.9;
@@ -85,7 +86,7 @@ function updateCropGuide() {
         w = window.innerWidth * 0.9;
         h = w / targetAspect;
     }
-
+    
     cropGuide.style.width = `${w}px`;
     cropGuide.style.height = `${h}px`;
 }
@@ -98,7 +99,7 @@ function resizeCanvas() {
     isDirty = true;
 }
 window.addEventListener('resize', resizeCanvas);
-resizeCanvas();
+resizeCanvas(); 
 
 // --- File I/O & Export Logic ---
 const generateUID = () => Math.random().toString(36).substring(2, 8);
@@ -110,15 +111,14 @@ fileInput.style.left = '-9999px';
 document.body.appendChild(fileInput);
 
 fileInput.onchange = e => {
-    if (!e.target.files.length) return;
+    if (!e.target.files.length) return; 
     const file = e.target.files[0];
     const reader = new FileReader();
     reader.onload = readerEvent => {
         try {
             const state = JSON.parse(readerEvent.target.result);
-
-            if (state.params) {
-                // DEEP COPY: Surgically update values to preserve lil-gui's array references
+            if (state.params) { 
+                // Deep copy to preserve UI bindings to arrays
                 for (let key in state.params) {
                     if (Array.isArray(params[key]) && Array.isArray(state.params[key])) {
                         for (let i = 0; i < params[key].length; i++) {
@@ -128,19 +128,18 @@ fileInput.onchange = e => {
                         params[key] = state.params[key];
                     }
                 }
-                gui.controllersRecursive().forEach(c => c.updateDisplay());
-                updateCropGuide();
+                gui.controllersRecursive().forEach(c => c.updateDisplay()); 
+                updateCropGuide(); 
             }
-
             if (state.camera) {
-                tPos = state.camera.pos; cPos = { x: tPos.x, y: tPos.y, z: tPos.z };
-                tRot = state.camera.rot; cRot = { w: tRot.w, x: tRot.x, y: tRot.y, z: tRot.z };
+                tPos = state.camera.pos; cPos = { x: tPos.x, y: tPos.y, z: tPos.z }; 
+                tRot = state.camera.rot; cRot = { w: tRot.w, x: tRot.x, y: tRot.y, z: tRot.z }; 
             }
             isDirty = true;
         } catch (err) { alert("Invalid state file."); }
     }
     reader.readAsText(file);
-    e.target.value = '';
+    e.target.value = ''; 
 };
 
 function createExportFBOs(w, h) {
@@ -154,12 +153,12 @@ function createExportFBOs(w, h) {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
         return tex;
     };
-
+    
     const tA = createFloatTex(), tB = createFloatTex();
     const fA = gl.createFramebuffer(), fB = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, fA); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tA, 0);
     gl.bindFramebuffer(gl.FRAMEBUFFER, fB); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tB, 0);
-
+    
     const tFinal = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tFinal);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
@@ -170,30 +169,30 @@ function createExportFBOs(w, h) {
 
     const fFinal = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, fFinal); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tFinal, 0);
-
+    
     return { tA, tB, fA, fB, tFinal, fFinal };
 }
 
 async function exportHighResImage() {
     if (isExporting) return;
     isExporting = true;
-    params.showCrop = false;
+    params.showCrop = false; 
     gui.controllersRecursive().forEach(c => c.updateDisplay());
     updateCropGuide();
-
+    
     const uid = generateUID();
     exportOverlay.style.display = 'flex';
     exportStatus.innerText = 'Initializing Memory...';
     exportBarFill.style.width = '0%';
-
+    
     await new Promise(r => setTimeout(r, 100));
 
     const totalW = params.exportWidth;
     const totalH = params.exportHeight;
-    const tileSize = 1024;
+    const tileSize = 1024; 
     const cols = Math.ceil(totalW / tileSize);
     const rows = Math.ceil(totalH / tileSize);
-
+    
     let exp = null;
 
     try {
@@ -209,7 +208,7 @@ async function exportHighResImage() {
             for (let x = 0; x < cols; x++) {
                 const curW = Math.min(tileSize, totalW - x * tileSize);
                 const curH = Math.min(tileSize, totalH - y * tileSize);
-
+                
                 gl.bindFramebuffer(gl.FRAMEBUFFER, exp.fA); gl.clearColor(0,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT);
                 gl.bindFramebuffer(gl.FRAMEBUFFER, exp.fB); gl.clearColor(0,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT);
                 gl.bindFramebuffer(gl.FRAMEBUFFER, exp.fFinal); gl.clearColor(0,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT);
@@ -218,17 +217,16 @@ async function exportHighResImage() {
                 let writeFbo = exp.fA;
 
                 for (let s = 0; s < params.exportSamples; s++) {
-                    // FIXED: Removed the leftover tileSize parameters!
                     drawExportFrame(totalW, totalH, x * tileSize, y * tileSize, s, writeFbo, readTex);
-
+                    
                     let tempT = readTex; readTex = writeFbo === exp.fA ? exp.tA : exp.tB;
                     writeFbo = writeFbo === exp.fA ? exp.fB : exp.fA;
 
-                    if (s % 2 === 0) await new Promise(r => setTimeout(r, 1));
+                    if (s % 2 === 0) await new Promise(r => setTimeout(r, 1)); 
                 }
 
                 let finalFloatTex = writeFbo === exp.fA ? exp.tB : exp.tA;
-
+                
                 gl.bindFramebuffer(gl.FRAMEBUFFER, exp.fFinal);
                 gl.useProgram(screenProgram);
                 let screenPosLoc = gl.getAttribLocation(screenProgram, 'a_position');
@@ -251,22 +249,22 @@ async function exportHighResImage() {
                         imageData.data[dstIdx] = pixels[srcIdx];
                         imageData.data[dstIdx+1] = pixels[srcIdx+1];
                         imageData.data[dstIdx+2] = pixels[srcIdx+2];
-                        imageData.data[dstIdx+3] = 255;
+                        imageData.data[dstIdx+3] = 255; 
                     }
                 }
-
+                
                 ctx.putImageData(imageData, x * tileSize, totalH - (y * tileSize) - curH);
-
+                
                 let progress = ((y * cols + x + 1) / (cols * rows)) * 100;
                 exportStatus.innerText = `Processing Tile ${y * cols + x + 1} of ${cols * rows}`;
                 exportBarFill.style.width = `${progress}%`;
-
-                await new Promise(r => setTimeout(r, 10));
+                
+                await new Promise(r => setTimeout(r, 10)); 
             }
         }
 
         exportStatus.innerText = 'Encoding PNG (This may take a minute)...';
-        await new Promise(r => setTimeout(r, 100));
+        await new Promise(r => setTimeout(r, 100)); 
 
         finalCanvas.toBlob((blob) => {
             if(!blob) { alert("Image too large to encode to PNG! Try lowering the resolution."); return; }
@@ -287,7 +285,7 @@ async function exportHighResImage() {
         }
         isExporting = false;
         exportOverlay.style.display = 'none';
-        gl.viewport(0, 0, canvas.width, canvas.height);
+        gl.viewport(0, 0, canvas.width, canvas.height); 
         isDirty = true;
     }
 }
@@ -309,20 +307,24 @@ const ioLogic = {
 const gui = new GUI({ title: 'Fractal Controls' });
 
 const mathFolder = gui.addFolder('Mathematics');
+mathFolder.add(params, 'fractalType', { 'Mandelbox': 0, 'Sierpinski Pyramid': 1, 'Menger Sponge': 2 }).name('Fractal Type').onChange(() => { isDirty = true; });
 mathFolder.add(params, 'scale', -3.0, 3.0).name('Box Scale');
 mathFolder.add(params, 'iterations', 1, 30, 1).name('Iterations');
 
 const palFolder = gui.addFolder('Algorithmic Palette');
 palFolder.addColor(params, 'palA').name('Color Offset');
 palFolder.addColor(params, 'palB').name('Color Contrast');
+
 const freqFolder = palFolder.addFolder('Frequency (RGB)');
 freqFolder.add(params.palC, 0, 0.0, 5.0, 0.01).name('Red Freq');
 freqFolder.add(params.palC, 1, 0.0, 5.0, 0.01).name('Green Freq');
 freqFolder.add(params.palC, 2, 0.0, 5.0, 0.01).name('Blue Freq');
+
 const phaseFolder = palFolder.addFolder('Phase Shift (RGB)');
 phaseFolder.add(params.palD, 0, 0.0, 1.0, 0.01).name('Red Phase');
 phaseFolder.add(params.palD, 1, 0.0, 1.0, 0.01).name('Green Phase');
 phaseFolder.add(params.palD, 2, 0.0, 1.0, 0.01).name('Blue Phase');
+
 palFolder.add(params, 'colorBlend', 0.1, 10.0, 0.1).name('Wrap Tightness');
 
 const visualFolder = gui.addFolder('Lighting & Environment');
@@ -364,6 +366,7 @@ const fsAccum = `#version 300 es
     uniform vec3 u_camRight;
     uniform vec3 u_camUp; 
 
+    uniform int u_fractalType;
     uniform float u_scale;
     uniform int u_iterations;
     
@@ -382,28 +385,62 @@ const fsAccum = `#version 300 es
     uniform vec2 u_jitter;
 
     vec2 map(vec3 p) {
-        vec3 offset = p;
         float dr = 1.0;
-        float trap = 0.0; 
+        float trap = 0.0;
 
-        for (int i = 0; i < 30; i++) {
-            if (i >= u_iterations) break; 
-            vec3 prevP = p; 
+        if (u_fractalType == 0) {
+            // Mandelbox
+            vec3 offset = p;
+            for (int i = 0; i < 30; i++) {
+                if (i >= u_iterations) break; 
+                vec3 prevP = p; 
+                
+                p = clamp(p, -1.0, 1.0) * 2.0 - p;
+                float r2 = dot(p, p);
+                if (r2 < 0.25) { p *= 4.0; dr *= 4.0; } 
+                else if (r2 < 1.0) { p /= r2; dr /= r2; }
+                
+                p = p * u_scale + offset;
+                dr = dr * abs(u_scale) + 1.0;
+                trap += min(length(p - prevP), 10.0); 
+            }
+            return vec2(length(p) / abs(dr), trap / float(u_iterations));
             
-            p = clamp(p, -1.0, 1.0) * 2.0 - p;
-            float r2 = dot(p, p);
-            if (r2 < 0.25) { p *= 4.0; dr *= 4.0; } 
-            else if (r2 < 1.0) { p /= r2; dr /= r2; }
+        } else if (u_fractalType == 1) {
+            // Sierpinski Tetrahedron
+            for (int i = 0; i < 30; i++) {
+                if (i >= u_iterations) break;
+                vec3 prevP = p;
+                
+                if(p.x + p.y < 0.0) p.xy = -p.yx;
+                if(p.x + p.z < 0.0) p.xz = -p.zx;
+                if(p.y + p.z < 0.0) p.yz = -p.zy;
+                
+                p = p * u_scale - vec3(1.0) * (u_scale - 1.0);
+                dr *= abs(u_scale);
+                trap += min(length(p - prevP), 10.0);
+            }
+            return vec2(length(p) / abs(dr), trap / float(u_iterations));
             
-            p = p * u_scale + offset;
-            dr = dr * abs(u_scale) + 1.0;
-            
-            // FIXED: Clamped to prevent math from generating NaN black pixels
-            trap += min(length(p - prevP), 10.0); 
+        } else {
+            // Menger Sponge
+            for (int i = 0; i < 30; i++) {
+                if (i >= u_iterations) break;
+                vec3 prevP = p;
+                
+                p = abs(p);
+                if (p.x < p.y) p.xy = p.yx;
+                if (p.x < p.z) p.xz = p.zx;
+                if (p.y < p.z) p.yz = p.zy;
+                
+                p = p * u_scale - vec3(1.0) * (u_scale - 1.0);
+                if (p.z < -0.5 * (u_scale - 1.0)) p.z += u_scale - 1.0;
+                
+                dr *= abs(u_scale);
+                trap += min(length(p - prevP), 10.0);
+            }
+            return vec2(length(p) / abs(dr), trap / float(u_iterations));
         }
-        
-        trap = trap / float(u_iterations);
-        return vec2(length(p) / abs(dr), trap);
     }
 
     vec3 getNormal(vec3 p, float t) {
@@ -524,7 +561,7 @@ const accumProgram = compileProgram(vsAccum, fsAccum);
 const screenProgram = compileProgram(vsScreen, fsScreen);
 
 // --- WebGL Main Viewport FBO Setup ---
-gl.getExtension('EXT_color_buffer_float');
+gl.getExtension('EXT_color_buffer_float'); 
 
 const positionBuffer = gl.createBuffer();
 gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
@@ -566,6 +603,7 @@ const locUp = gl.getUniformLocation(accumProgram, 'u_camUp');
 const locPrev = gl.getUniformLocation(accumProgram, 'u_prevFrame');
 const locFrame = gl.getUniformLocation(accumProgram, 'u_frame');
 const locJitter = gl.getUniformLocation(accumProgram, 'u_jitter');
+const locFractalType = gl.getUniformLocation(accumProgram, 'u_fractalType');
 const locScale = gl.getUniformLocation(accumProgram, 'u_scale');
 const locIter = gl.getUniformLocation(accumProgram, 'u_iterations');
 
@@ -578,6 +616,7 @@ const locColorBlend = gl.getUniformLocation(accumProgram, 'u_colorBlend');
 const locBg = gl.getUniformLocation(accumProgram, 'u_bgColor');
 const locBright = gl.getUniformLocation(accumProgram, 'u_brightness');
 const locLight = gl.getUniformLocation(accumProgram, 'u_lightPos');
+
 
 // --- Quaternion Math ---
 const Quat = {
@@ -606,10 +645,10 @@ canvas.addEventListener('mousedown', (e) => {
         let borderSize = Math.min(canvas.width, canvas.height) * 0.18;
         let isEdgeX = e.clientX < borderSize || e.clientX > canvas.width - borderSize;
         let isEdgeY = e.clientY < borderSize || e.clientY > canvas.height - borderSize;
-        if (isEdgeX || isEdgeY) { isRolling = true; lastRollAngle = Math.atan2(e.clientY - canvas.height / 2, e.clientX - canvas.width / 2); }
+        if (isEdgeX || isEdgeY) { isRolling = true; lastRollAngle = Math.atan2(e.clientY - canvas.height / 2, e.clientX - canvas.width / 2); } 
         else { isLooking = true; }
     }
-    if (e.button === 2) isPanning = true;
+    if (e.button === 2) isPanning = true; 
     lastInput = { x: e.clientX, y: e.clientY };
 });
 canvas.addEventListener('mousemove', (e) => {
@@ -618,7 +657,7 @@ canvas.addEventListener('mousemove', (e) => {
         let newAngle = Math.atan2(e.clientY - canvas.height / 2, e.clientX - canvas.width / 2);
         let dAngle = newAngle - lastRollAngle;
         if (dAngle > Math.PI) dAngle -= Math.PI * 2; if (dAngle < -Math.PI) dAngle += Math.PI * 2;
-        tRot = Quat.normalize(Quat.multiply(tRot, Quat.fromAxisAngle([0, 0, 1], dAngle)));
+        tRot = Quat.normalize(Quat.multiply(tRot, Quat.fromAxisAngle([0, 0, 1], dAngle))); 
         lastRollAngle = newAngle;
     } else if (isLooking) {
         let qTurn = Quat.multiply(Quat.fromAxisAngle([0, 1, 0], -deltaX * 0.005), Quat.fromAxisAngle([1, 0, 0], -deltaY * 0.005));
@@ -627,7 +666,7 @@ canvas.addEventListener('mousemove', (e) => {
     if (isPanning) handlePan(deltaX, deltaY);
     lastInput = { x: e.clientX, y: e.clientY };
 });
-window.addEventListener('mouseup', () => { isLooking = false; isPanning = false; isRolling = false; });
+window.addEventListener('mouseup', () => { isLooking = false; isPanning = false; isRolling = false; }); 
 canvas.addEventListener('mouseleave', () => { isLooking = false; isPanning = false; isRolling = false; });
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); handleForwardMovement(-e.deltaY * 0.005); }, { passive: false });
 
@@ -662,8 +701,8 @@ canvas.addEventListener('touchmove', (e) => {
     } else if (e.touches.length === 2 && isPanning) {
         const currentDistance = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
         const currentCenter = { x: (e.touches[0].clientX + e.touches[1].clientX) / 2, y: (e.touches[0].clientY + e.touches[1].clientY) / 2 };
-        handleForwardMovement((currentDistance - lastTouchDistance) * 0.01);
-        handlePan(currentCenter.x - lastTouchCenter.x, currentCenter.y - lastTouchCenter.y);
+        handleForwardMovement((currentDistance - lastTouchDistance) * 0.01); 
+        handlePan(currentCenter.x - lastTouchCenter.x, currentCenter.y - lastTouchCenter.y); 
         lastTouchDistance = currentDistance; lastTouchCenter = currentCenter;
     }
 }, { passive: false });
@@ -708,9 +747,10 @@ function drawExportFrame(targetWidth, targetHeight, offsetX, offsetY, frameIndex
     gl.uniform3f(locRight, right.x, right.y, right.z);
     gl.uniform3f(locUp, up.x, up.y, up.z);
 
+    gl.uniform1i(locFractalType, params.fractalType);
     gl.uniform1f(locScale, params.scale);
     gl.uniform1i(locIter, params.iterations);
-
+    
     gl.uniform3f(locPalA, params.palA[0], params.palA[1], params.palA[2]);
     gl.uniform3f(locPalB, params.palB[0], params.palB[1], params.palB[2]);
     gl.uniform3f(locPalC, params.palC[0], params.palC[1], params.palC[2]);
@@ -722,7 +762,7 @@ function drawExportFrame(targetWidth, targetHeight, offsetX, offsetY, frameIndex
     gl.uniform3f(locLight, params.lightX, params.lightY, params.lightZ);
 
     gl.uniform1f(locFrame, frameIndex);
-
+    
     let jx = frameIndex === 0 ? 0 : hash(frameIndex * 12.9898) - 0.5;
     let jy = frameIndex === 0 ? 0 : hash(frameIndex * 78.2330) - 0.5;
     gl.uniform2f(locJitter, jx, jy);
@@ -740,7 +780,7 @@ let texWidth = canvas.width, texHeight = canvas.height;
 function render(time) {
     if (isExporting) {
         requestAnimationFrame(render);
-        return;
+        return; 
     }
 
     if (canvas.width !== texWidth || canvas.height !== texHeight) {
@@ -749,15 +789,15 @@ function render(time) {
         isDirty = true;
     }
 
-    cPos.x += (tPos.x - cPos.x) * 0.1;
-    cPos.y += (tPos.y - cPos.y) * 0.1;
+    cPos.x += (tPos.x - cPos.x) * 0.1; 
+    cPos.y += (tPos.y - cPos.y) * 0.1; 
     cPos.z += (tPos.z - cPos.z) * 0.1;
     cRot = Quat.slerp(cRot, tRot, 0.1);
 
     if (Math.abs(tPos.x - cPos.x) < 0.001) cPos.x = tPos.x;
     if (Math.abs(tPos.y - cPos.y) < 0.001) cPos.y = tPos.y;
     if (Math.abs(tPos.z - cPos.z) < 0.001) cPos.z = tPos.z;
-
+    
     if (Math.abs(tRot.x - cRot.x) < 0.001 && Math.abs(tRot.y - cRot.y) < 0.001 && Math.abs(tRot.z - cRot.z) < 0.001) {
         cRot = { w: tRot.w, x: tRot.x, y: tRot.y, z: tRot.z };
     }
@@ -766,13 +806,13 @@ function render(time) {
     let isMovingRot = Math.abs(tRot.x - cRot.x) > 0 || Math.abs(tRot.y - cRot.y) > 0 || Math.abs(tRot.z - cRot.z) > 0;
 
     if (isMovingPos || isMovingRot || isLooking || isPanning || isRolling || isDirty) {
-        frameCount = 0;
+        frameCount = 0; 
         isDirty = false;
     }
 
     if (frameCount < params.previewSamples) {
         gl.viewport(0, 0, canvas.width, canvas.height);
-
+        
         let jx = frameCount === 0 ? 0 : hash(frameCount * 12.9898) - 0.5;
         let jy = frameCount === 0 ? 0 : hash(frameCount * 78.2330) - 0.5;
 
@@ -796,9 +836,10 @@ function render(time) {
         gl.uniform3f(locRight, right.x, right.y, right.z);
         gl.uniform3f(locUp, up.x, up.y, up.z);
 
+        gl.uniform1i(locFractalType, params.fractalType);
         gl.uniform1f(locScale, params.scale);
         gl.uniform1i(locIter, params.iterations);
-
+        
         gl.uniform3f(locPalA, params.palA[0], params.palA[1], params.palA[2]);
         gl.uniform3f(locPalB, params.palB[0], params.palB[1], params.palB[2]);
         gl.uniform3f(locPalC, params.palC[0], params.palC[1], params.palC[2]);
@@ -820,7 +861,7 @@ function render(time) {
 
         let tempTex = texA; texA = texB; texB = tempTex;
         let tempFbo = fboA; fboA = fboB; fboB = tempFbo;
-
+        
         frameCount++;
     }
 
