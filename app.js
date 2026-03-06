@@ -46,6 +46,9 @@ document.body.appendChild(exportOverlay);
 
 // --- UI Parameters ---
 const params = {
+    precisionMode: false,     // NEW: Slow down movements
+    surfaceDetail: 0.001,     // NEW: Adjust Epsilon threshold
+    
     fractalType: 0, 
     scale: 2.0,
     iterations: 12,
@@ -305,6 +308,8 @@ const ioLogic = {
 // --- GUI Setup ---
 const gui = new GUI({ title: 'Fractal Controls' });
 
+gui.add(params, 'precisionMode').name('Precision Movement');
+
 const mathFolder = gui.addFolder('Mathematics');
 mathFolder.add(params, 'fractalType', { 'Mandelbox': 0, 'Sierpinski Pyramid': 1, 'Menger Sponge': 2 }).name('Fractal Type').onChange(() => { isDirty = true; });
 mathFolder.add(params, 'scale', -3.0, 3.0).name('Box Scale');
@@ -324,6 +329,7 @@ phaseFolder.add(params.palD, 2, 0.0, 1.0, 0.01).name('Blue Phase');
 palFolder.add(params, 'colorBlend', 0.1, 10.0, 0.1).name('Wrap Tightness');
 
 const visualFolder = gui.addFolder('Lighting & Environment');
+visualFolder.add(params, 'surfaceDetail', 0.00001, 0.005, 0.00001).name('Surface Detail');
 visualFolder.addColor(params, 'bgColor').name('Background / Fog');
 visualFolder.add(params, 'brightness', 0.1, 5.0, 0.1).name('Brightness');
 visualFolder.add(params, 'lightX', -10.0, 10.0).name('Light X');
@@ -366,6 +372,7 @@ const fsAccum = `#version 300 es
     uniform float u_scale;
     uniform int u_iterations;
     
+    uniform float u_surfaceDetail;
     uniform vec3 u_palA;
     uniform vec3 u_palB;
     uniform vec3 u_palC;
@@ -416,7 +423,6 @@ const fsAccum = `#version 300 es
                 dr *= abs(u_scale);
                 trap += min(length(p - prevP), 10.0);
             }
-            // FIXED: Added -1.0 thickness so rays don't slip through the atomic dust
             return vec2((length(p) - 1.0) / abs(dr), trap / float(u_iterations));
             
         } else {
@@ -436,13 +442,12 @@ const fsAccum = `#version 300 es
                 dr *= abs(u_scale);
                 trap += min(length(p - prevP), 10.0);
             }
-            // FIXED: Added -1.0 thickness 
             return vec2((length(p) - 1.0) / abs(dr), trap / float(u_iterations));
         }
     }
 
     vec3 getNormal(vec3 p, float t) {
-        float eps = max(0.0005, 0.001 * t); 
+        float eps = max(u_surfaceDetail * 0.1, u_surfaceDetail * t); 
         vec2 e = vec2(eps, 0.0);
         vec3 n = map(p).x - vec3(map(p - e.xyy).x, map(p - e.yxy).x, map(p - e.yyx).x);
         return normalize(n);
@@ -472,8 +477,6 @@ const fsAccum = `#version 300 es
 
     vec3 getSceneColor(vec3 ro, vec3 rd) {
         float t = 0.0;
-        
-        // FIXED: Boosted steps for deeper structural rendering
         int max_steps = 400; 
         float max_dist = 100.0;
         vec3 bgCol = u_bgColor;
@@ -482,9 +485,8 @@ const fsAccum = `#version 300 es
         for(int i = 0; i < max_steps; i++) {
             vec3 p = ro + rd * t;
             float d = map(p).x;
-            if(abs(d) < 0.001 * t || t > max_dist) break;
+            if(abs(d) < u_surfaceDetail * t || t > max_dist) break;
             
-            // FIXED: Slow down the raymarcher for KIFS fractals so they don't clip walls
             t += d * (u_fractalType == 0 ? 0.8 : 0.5); 
         }
 
@@ -609,6 +611,7 @@ const locFractalType = gl.getUniformLocation(accumProgram, 'u_fractalType');
 const locScale = gl.getUniformLocation(accumProgram, 'u_scale');
 const locIter = gl.getUniformLocation(accumProgram, 'u_iterations');
 
+const locSurfaceDetail = gl.getUniformLocation(accumProgram, 'u_surfaceDetail');
 const locPalA = gl.getUniformLocation(accumProgram, 'u_palA');
 const locPalB = gl.getUniformLocation(accumProgram, 'u_palB');
 const locPalC = gl.getUniformLocation(accumProgram, 'u_palC');
@@ -655,6 +658,8 @@ canvas.addEventListener('mousedown', (e) => {
 });
 canvas.addEventListener('mousemove', (e) => {
     let deltaX = e.clientX - lastInput.x; let deltaY = e.clientY - lastInput.y;
+    let speedMult = (params.precisionMode || e.shiftKey) ? 0.1 : 1.0;
+
     if (isRolling) {
         let newAngle = Math.atan2(e.clientY - canvas.height / 2, e.clientX - canvas.width / 2);
         let dAngle = newAngle - lastRollAngle;
@@ -665,12 +670,17 @@ canvas.addEventListener('mousemove', (e) => {
         let qTurn = Quat.multiply(Quat.fromAxisAngle([0, 1, 0], -deltaX * 0.005), Quat.fromAxisAngle([1, 0, 0], -deltaY * 0.005));
         tRot = Quat.normalize(Quat.multiply(tRot, qTurn));
     }
-    if (isPanning) handlePan(deltaX, deltaY);
+    if (isPanning) handlePan(deltaX * speedMult, deltaY * speedMult);
     lastInput = { x: e.clientX, y: e.clientY };
 });
 window.addEventListener('mouseup', () => { isLooking = false; isPanning = false; isRolling = false; }); 
 canvas.addEventListener('mouseleave', () => { isLooking = false; isPanning = false; isRolling = false; });
-canvas.addEventListener('wheel', (e) => { e.preventDefault(); handleForwardMovement(-e.deltaY * 0.005); }, { passive: false });
+
+canvas.addEventListener('wheel', (e) => { 
+    e.preventDefault(); 
+    let speedMult = (params.precisionMode || e.shiftKey) ? 0.1 : 1.0;
+    handleForwardMovement(-e.deltaY * 0.005 * speedMult); 
+}, { passive: false });
 
 canvas.addEventListener('touchstart', (e) => {
     e.preventDefault();
@@ -687,8 +697,11 @@ canvas.addEventListener('touchstart', (e) => {
         lastTouchCenter = { x: (e.touches[0].clientX + e.touches[1].clientX) / 2, y: (e.touches[0].clientY + e.touches[1].clientY) / 2 };
     }
 }, { passive: false });
+
 canvas.addEventListener('touchmove', (e) => {
     e.preventDefault();
+    let speedMult = params.precisionMode ? 0.1 : 1.0;
+
     if (e.touches.length === 1) {
         if (isRolling) {
             let newAngle = Math.atan2(e.touches[0].clientY - canvas.height / 2, e.touches[0].clientX - canvas.width / 2);
@@ -703,11 +716,14 @@ canvas.addEventListener('touchmove', (e) => {
     } else if (e.touches.length === 2 && isPanning) {
         const currentDistance = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
         const currentCenter = { x: (e.touches[0].clientX + e.touches[1].clientX) / 2, y: (e.touches[0].clientY + e.touches[1].clientY) / 2 };
-        handleForwardMovement((currentDistance - lastTouchDistance) * 0.01); 
-        handlePan(currentCenter.x - lastTouchCenter.x, currentCenter.y - lastTouchCenter.y); 
+        
+        handleForwardMovement((currentDistance - lastTouchDistance) * 0.01 * speedMult); 
+        handlePan((currentCenter.x - lastTouchCenter.x) * speedMult, (currentCenter.y - lastTouchCenter.y) * speedMult); 
+        
         lastTouchDistance = currentDistance; lastTouchCenter = currentCenter;
     }
 }, { passive: false });
+
 canvas.addEventListener('touchend', (e) => {
     e.preventDefault();
     if (e.touches.length < 2) isPanning = false;
@@ -753,6 +769,7 @@ function drawExportFrame(targetWidth, targetHeight, offsetX, offsetY, frameIndex
     gl.uniform1f(locScale, params.scale);
     gl.uniform1i(locIter, params.iterations);
     
+    gl.uniform1f(locSurfaceDetail, params.surfaceDetail);
     gl.uniform3f(locPalA, params.palA[0], params.palA[1], params.palA[2]);
     gl.uniform3f(locPalB, params.palB[0], params.palB[1], params.palB[2]);
     gl.uniform3f(locPalC, params.palC[0], params.palC[1], params.palC[2]);
@@ -842,6 +859,7 @@ function render(time) {
         gl.uniform1f(locScale, params.scale);
         gl.uniform1i(locIter, params.iterations);
         
+        gl.uniform1f(locSurfaceDetail, params.surfaceDetail);
         gl.uniform3f(locPalA, params.palA[0], params.palA[1], params.palA[2]);
         gl.uniform3f(locPalB, params.palB[0], params.palB[1], params.palB[2]);
         gl.uniform3f(locPalC, params.palC[0], params.palC[1], params.palC[2]);
