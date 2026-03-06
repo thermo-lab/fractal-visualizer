@@ -197,7 +197,12 @@ async function exportHighResImage() {
 
     const totalW = params.exportWidth;
     const totalH = params.exportHeight;
-    const tileSize = 1024;
+    //const tileSize = 1024;
+
+// Change this line to dynamically choose smaller tiles for mobile screens
+    const isMobile = window.innerWidth <= 768;
+    const tileSize = isMobile ? 256 : 512; // Smaller bites for the GPU watchdog
+
     const cols = Math.ceil(totalW / tileSize);
     const rows = Math.ceil(totalH / tileSize);
 
