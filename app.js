@@ -46,7 +46,7 @@ document.body.appendChild(exportOverlay);
 
 // --- UI Parameters ---
 const params = {
-    fractalType: 0, // 0 = Mandelbox, 1 = Sierpinski, 2 = Menger
+    fractalType: 0, 
     scale: 2.0,
     iterations: 12,
     
@@ -118,7 +118,6 @@ fileInput.onchange = e => {
         try {
             const state = JSON.parse(readerEvent.target.result);
             if (state.params) { 
-                // Deep copy to preserve UI bindings to arrays
                 for (let key in state.params) {
                     if (Array.isArray(params[key]) && Array.isArray(state.params[key])) {
                         for (let i = 0; i < params[key].length; i++) {
@@ -314,17 +313,14 @@ mathFolder.add(params, 'iterations', 1, 30, 1).name('Iterations');
 const palFolder = gui.addFolder('Algorithmic Palette');
 palFolder.addColor(params, 'palA').name('Color Offset');
 palFolder.addColor(params, 'palB').name('Color Contrast');
-
 const freqFolder = palFolder.addFolder('Frequency (RGB)');
 freqFolder.add(params.palC, 0, 0.0, 5.0, 0.01).name('Red Freq');
 freqFolder.add(params.palC, 1, 0.0, 5.0, 0.01).name('Green Freq');
 freqFolder.add(params.palC, 2, 0.0, 5.0, 0.01).name('Blue Freq');
-
 const phaseFolder = palFolder.addFolder('Phase Shift (RGB)');
 phaseFolder.add(params.palD, 0, 0.0, 1.0, 0.01).name('Red Phase');
 phaseFolder.add(params.palD, 1, 0.0, 1.0, 0.01).name('Green Phase');
 phaseFolder.add(params.palD, 2, 0.0, 1.0, 0.01).name('Blue Phase');
-
 palFolder.add(params, 'colorBlend', 0.1, 10.0, 0.1).name('Wrap Tightness');
 
 const visualFolder = gui.addFolder('Lighting & Environment');
@@ -420,7 +416,8 @@ const fsAccum = `#version 300 es
                 dr *= abs(u_scale);
                 trap += min(length(p - prevP), 10.0);
             }
-            return vec2(length(p) / abs(dr), trap / float(u_iterations));
+            // FIXED: Added -1.0 thickness so rays don't slip through the atomic dust
+            return vec2((length(p) - 1.0) / abs(dr), trap / float(u_iterations));
             
         } else {
             // Menger Sponge
@@ -439,7 +436,8 @@ const fsAccum = `#version 300 es
                 dr *= abs(u_scale);
                 trap += min(length(p - prevP), 10.0);
             }
-            return vec2(length(p) / abs(dr), trap / float(u_iterations));
+            // FIXED: Added -1.0 thickness 
+            return vec2((length(p) - 1.0) / abs(dr), trap / float(u_iterations));
         }
     }
 
@@ -474,7 +472,9 @@ const fsAccum = `#version 300 es
 
     vec3 getSceneColor(vec3 ro, vec3 rd) {
         float t = 0.0;
-        int max_steps = 250; 
+        
+        // FIXED: Boosted steps for deeper structural rendering
+        int max_steps = 400; 
         float max_dist = 100.0;
         vec3 bgCol = u_bgColor;
         vec3 col = bgCol;
@@ -483,7 +483,9 @@ const fsAccum = `#version 300 es
             vec3 p = ro + rd * t;
             float d = map(p).x;
             if(abs(d) < 0.001 * t || t > max_dist) break;
-            t += d * 0.8; 
+            
+            // FIXED: Slow down the raymarcher for KIFS fractals so they don't clip walls
+            t += d * (u_fractalType == 0 ? 0.8 : 0.5); 
         }
 
         if(t < max_dist) {
