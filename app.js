@@ -46,7 +46,7 @@ document.body.appendChild(exportOverlay);
 
 // --- UI Parameters ---
 const params = {
-    moveSpeed: 1.0,           // NEW: Exponential speed slider
+    moveSpeed: 1.0,
     surfaceDetail: 0.001,
 
     fractalType: 0,
@@ -308,7 +308,6 @@ const ioLogic = {
 // --- GUI Setup ---
 const gui = new GUI({ title: 'Fractal Controls' });
 
-// NEW: Linear slider, mathematical exponential curve under the hood.
 gui.add(params, 'moveSpeed', 0.01, 1.0, 0.01).name('Movement Speed');
 
 const mathFolder = gui.addFolder('Mathematics');
@@ -660,8 +659,8 @@ canvas.addEventListener('mousedown', (e) => {
 canvas.addEventListener('mousemove', (e) => {
     let deltaX = e.clientX - lastInput.x; let deltaY = e.clientY - lastInput.y;
 
-    // NEW: Cubic curve for deep zoom control, plus shift key support
-    let speedMult = Math.pow(params.moveSpeed, 3);
+    // FIXED: Use a quadratic curve for speed to prevent microscopic freezing
+    let speedMult = Math.pow(params.moveSpeed, 2);
     if (e.shiftKey) speedMult *= 0.1;
 
     if (isRolling) {
@@ -671,9 +670,10 @@ canvas.addEventListener('mousemove', (e) => {
         tRot = Quat.normalize(Quat.multiply(tRot, Quat.fromAxisAngle([0, 0, 1], dAngle)));
         lastRollAngle = newAngle;
     } else if (isLooking) {
+        // FIXED: Removed speed multiplier from rotation so your head always turns normally
         let qTurn = Quat.multiply(
-            Quat.fromAxisAngle([0, 1, 0], -deltaX * 0.005 * speedMult),
-            Quat.fromAxisAngle([1, 0, 0], -deltaY * 0.005 * speedMult)
+            Quat.fromAxisAngle([0, 1, 0], -deltaX * 0.005),
+            Quat.fromAxisAngle([1, 0, 0], -deltaY * 0.005)
         );
         tRot = Quat.normalize(Quat.multiply(tRot, qTurn));
     }
@@ -685,7 +685,7 @@ canvas.addEventListener('mouseleave', () => { isLooking = false; isPanning = fal
 
 canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
-    let speedMult = Math.pow(params.moveSpeed, 3);
+    let speedMult = Math.pow(params.moveSpeed, 2);
     if (e.shiftKey) speedMult *= 0.1;
     handleForwardMovement(-e.deltaY * 0.005 * speedMult);
 }, { passive: false });
@@ -708,7 +708,7 @@ canvas.addEventListener('touchstart', (e) => {
 
 canvas.addEventListener('touchmove', (e) => {
     e.preventDefault();
-    let speedMult = Math.pow(params.moveSpeed, 3);
+    let speedMult = Math.pow(params.moveSpeed, 2);
 
     if (e.touches.length === 1) {
         if (isRolling) {
@@ -718,8 +718,8 @@ canvas.addEventListener('touchmove', (e) => {
             tRot = Quat.normalize(Quat.multiply(tRot, Quat.fromAxisAngle([0, 0, 1], dAngle))); lastRollAngle = newAngle;
         } else if (isLooking) {
             let qTurn = Quat.multiply(
-                Quat.fromAxisAngle([0, 1, 0], (e.touches[0].clientX - lastInput.x) * 0.005 * speedMult),
-                Quat.fromAxisAngle([1, 0, 0], (e.touches[0].clientY - lastInput.y) * 0.005 * speedMult)
+                Quat.fromAxisAngle([0, 1, 0], (e.touches[0].clientX - lastInput.x) * 0.005),
+                Quat.fromAxisAngle([1, 0, 0], (e.touches[0].clientY - lastInput.y) * 0.005)
             );
             tRot = Quat.normalize(Quat.multiply(tRot, qTurn));
         }
@@ -824,11 +824,12 @@ function render(time) {
     cPos.z += (tPos.z - cPos.z) * 0.1;
     cRot = Quat.slerp(cRot, tRot, 0.1);
 
-    if (Math.abs(tPos.x - cPos.x) < 0.001) cPos.x = tPos.x;
-    if (Math.abs(tPos.y - cPos.y) < 0.001) cPos.y = tPos.y;
-    if (Math.abs(tPos.z - cPos.z) < 0.001) cPos.z = tPos.z;
+    // FIXED: Pushed the snap threshold down to 1-millionth of a unit
+    if (Math.abs(tPos.x - cPos.x) < 0.000001) cPos.x = tPos.x;
+    if (Math.abs(tPos.y - cPos.y) < 0.000001) cPos.y = tPos.y;
+    if (Math.abs(tPos.z - cPos.z) < 0.000001) cPos.z = tPos.z;
 
-    if (Math.abs(tRot.x - cRot.x) < 0.001 && Math.abs(tRot.y - cRot.y) < 0.001 && Math.abs(tRot.z - cRot.z) < 0.001) {
+    if (Math.abs(tRot.x - cRot.x) < 0.000001 && Math.abs(tRot.y - cRot.y) < 0.000001 && Math.abs(tRot.z - cRot.z) < 0.000001) {
         cRot = { w: tRot.w, x: tRot.x, y: tRot.y, z: tRot.z };
     }
 
