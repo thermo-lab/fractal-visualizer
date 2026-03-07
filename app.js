@@ -229,13 +229,21 @@ async function exportHighResImage() {
                 let readTex = exp.tB;
                 let writeFbo = exp.fA;
 
+                // Track time to prevent watchdog crashes without over-yielding
+                let lastYieldTime = performance.now();
+
                 for (let s = 0; s < params.exportSamples; s++) {
                     drawExportFrame(totalW, totalH, x * tileSize, y * tileSize, s, writeFbo, readTex);
-
+                    
                     let tempT = readTex; readTex = writeFbo === exp.fA ? exp.tA : exp.tB;
                     writeFbo = writeFbo === exp.fA ? exp.fB : exp.fA;
 
-                    if (s % 2 === 0) await new Promise(r => setTimeout(r, 1));
+                    // SMART YIELD: Only pause if the loop has blocked the thread for more than 40ms.
+                    // This lets the GPU process multiple samples instantly before taking a tiny breath.
+                    if (performance.now() - lastYieldTime > 40) {
+                        await new Promise(r => setTimeout(r, 0)); 
+                        lastYieldTime = performance.now();
+                    }
                 }
 
                 let finalFloatTex = writeFbo === exp.fA ? exp.tB : exp.tA;
