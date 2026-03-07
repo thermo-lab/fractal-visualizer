@@ -72,8 +72,8 @@ const params = {
 
     previewSamples: 60,
     showCrop: false,
-    exportWidth: 7200,
-    exportHeight: 10800,
+    exportWidth: 2000,
+    exportHeight: 3000,
     exportSamples: 60
 };
 
