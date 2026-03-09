@@ -854,24 +854,32 @@ function render(time) {
         isDirty = true;
     }
 
-    cPos.x += (tPos.x - cPos.x) * 0.1;
-    cPos.y += (tPos.y - cPos.y) * 0.1;
+    // 1. Interpolate
+    cPos.x += (tPos.x - cPos.x) * 0.1; 
+    cPos.y += (tPos.y - cPos.y) * 0.1; 
     cPos.z += (tPos.z - cPos.z) * 0.1;
     cRot = Quat.slerp(cRot, tRot, 0.1);
 
-    if (Math.abs(tPos.x - cPos.x) < 0.000001) cPos.x = tPos.x;
-    if (Math.abs(tPos.y - cPos.y) < 0.000001) cPos.y = tPos.y;
-    if (Math.abs(tPos.z - cPos.z) < 0.000001) cPos.z = tPos.z;
-
-    if (Math.abs(tRot.x - cRot.x) < 0.000001 && Math.abs(tRot.y - cRot.y) < 0.000001 && Math.abs(tRot.z - cRot.z) < 0.000001) {
+    // 2. Snap Position (Using squared distance for cleaner math)
+    let posDiffSq = (tPos.x - cPos.x)**2 + (tPos.y - cPos.y)**2 + (tPos.z - cPos.z)**2;
+    if (posDiffSq < 0.0000000001) {
+        cPos.x = tPos.x; cPos.y = tPos.y; cPos.z = tPos.z;
+    }
+    
+    // 3. Snap Rotation (Using Dot Product to perfectly handle Quaternion sign-flipping)
+    let dotRot = tRot.w*cRot.w + tRot.x*cRot.x + tRot.y*cRot.y + tRot.z*cRot.z;
+    if (Math.abs(dotRot) > 0.999999) {
         cRot = { w: tRot.w, x: tRot.x, y: tRot.y, z: tRot.z };
     }
 
-    let isMovingPos = Math.abs(tPos.x - cPos.x) > 0 || Math.abs(tPos.y - cPos.y) > 0 || Math.abs(tPos.z - cPos.z) > 0;
-    let isMovingRot = Math.abs(tRot.x - cRot.x) > 0 || Math.abs(tRot.y - cRot.y) > 0 || Math.abs(tRot.z - cRot.z) > 0;
+    // 4. Movement Detection
+    let isMovingPos = tPos.x !== cPos.x || tPos.y !== cPos.y || tPos.z !== cPos.z;
+    let isMovingRot = tRot.w !== cRot.w || tRot.x !== cRot.x || tRot.y !== cRot.y || tRot.z !== cRot.z;
 
-    if (isMovingPos || isMovingRot || isLooking || isPanning || isRolling || isDirty) {
-        frameCount = 0;
+    // FIXED: Removed input flags (isLooking, isPanning, isRolling) so TAA refines 
+    // the exact millisecond the camera stops, even if you are still holding the input.
+    if (isMovingPos || isMovingRot || isDirty) {
+        frameCount = 0; 
         isDirty = false;
     }
 
