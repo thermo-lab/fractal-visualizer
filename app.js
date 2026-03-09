@@ -506,15 +506,28 @@ const fsAccum = `#version 300 es
         float max_dist = 100.0;
         vec3 bgCol = u_bgColor;
         vec3 col = bgCol;
+        
+        bool hit = false; // NEW: Strict tracking of physical collision
+        float d = 0.0;
 
         for(int i = 0; i < max_steps; i++) {
             vec3 p = ro + rd * t;
-            float d = map(p).x;
-            if(abs(d) < u_surfaceDetail * t || t > max_dist) break;
+            d = map(p).x;
+            
+            // FIXED: Removed abs(). If d is negative, we stepped inside the wall. 
+            // That is a confirmed physical hit. Break immediately!
+            if(d < u_surfaceDetail * t) {
+                hit = true;
+                break;
+            }
+            if(t > max_dist) break;
+            
             t += d * (u_fractalType == 0 ? 0.8 : 0.5); 
         }
 
-        if(t < max_dist) {
+        // FIXED: Only apply lighting if we definitively struck the surface.
+        // This instantly deletes the floating, transparent "ghost" rays.
+        if(hit) {
             vec3 p = ro + rd * t;       
             vec3 n = getNormal(p, t);      
             vec3 lightDir = normalize(u_lightPos - p);
@@ -532,6 +545,7 @@ const fsAccum = `#version 300 es
             vec3 rimColor = mix(baseCol, vec3(1.0), u_rimWhiteness); 
             col += rimColor * pow(rim, 4.0) * u_rimStrength * ao; 
         }
+        
         return mix(col, bgCol, 1.0 - exp(-u_fogDensity * t));
     }
 
